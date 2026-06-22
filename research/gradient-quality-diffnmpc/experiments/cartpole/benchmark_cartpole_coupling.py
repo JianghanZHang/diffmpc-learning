@@ -60,16 +60,14 @@ import jax.numpy as jnp
 from jax import checkpoint, jit, vmap
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# Resolve `turbompc` from the diffmpc2-gradckpt worktree, NOT the sibling pip-editable
-# /home/jianghan/Workspace/diffmpc2. The two ship different build/ffi/*.so; only the gradckpt
-# worktree's freshly rebuilt cuDSS-0.7.1 .so registers a handler the installed jaxlib 0.8.2
-# accepts (the sibling's older .so silently fails -> "No FFI handler registered ...").
-# This file lives in research/.../experiments/cartpole/; walk up 4 dirs to diffmpc-learning/,
-# then into diffmpc2-gradckpt (a sibling of `research`).
+# Resolve `turbompc` from the consolidated diffmpc2/ checkout (a sibling of `research/` under
+# diffmpc-learning/), NOT the pip-editable /home/jianghan/Workspace/diffmpc2 which ships a
+# different `diffmpc` package. This file lives in research/.../experiments/cartpole/; walk up
+# 4 dirs to diffmpc-learning/, then into diffmpc2/.
 _DL_ROOT = os.path.abspath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", ".."))   # diffmpc-learning/
-_WORKTREE_ROOT = os.path.join(_DL_ROOT, "diffmpc2-gradckpt")
-sys.path.insert(0, _WORKTREE_ROOT)
+_SOLVER_ROOT = os.path.join(_DL_ROOT, "diffmpc2")
+sys.path.insert(0, _SOLVER_ROOT)
 from turbompc.dynamics.cartpole_dynamics import (  # noqa: E402
     CartpoleDynamics,
     default_parameters as CP_PARAMS,
@@ -86,11 +84,20 @@ from turbompc.solvers.turbompc_solver import (  # noqa: E402
     TurboMPCSolver, parse_forward_backend, parse_backward_backend)
 from turbompc.utils.load_params import load_solver_params  # noqa: E402
 from turbompc.utils.timing import ProblemConfig, build_rollout_fn  # noqa: E402
-# Eagerly register the fused-cuDSS ADMM FFI handler. The forward backend admm_fused_cudss
-# imports this lazily inside the traced while_loop body (admm.py:750); that lazy registration
-# can fire too late, so XLA fails with "No FFI handler registered for admm_cudss_cuda_f64".
-# Importing here guarantees jax.ffi.register_ffi_target runs before any solve is lowered.
-import turbompc.solvers.admm.admm_cudss_ffi_backend  # noqa: E402,F401
+# Eagerly register the fused-cuDSS ADMM FFI handler IF its compiled .so is present (the forward
+# backend admm_fused_cudss otherwise imports it lazily inside the traced while_loop body,
+# admm.py:750, which can fire too late -> "No FFI handler registered for admm_cudss_cuda_f64").
+# The cuDSS FFI .so is an OPTIONAL build (`make` in diffmpc2/); when absent the benchmark runs on
+# the pure-JAX backends (GPU-capable, no FFI build needed) which are the defaults below. NOTE: the
+# release-cleanup .cu sources are the cuDSS-0.8 API; a working 0.7.1 build is required for the cuDSS
+# backends on sm_120 (CARTPOLE_COUPLING_HANDOFF.md §2 — the 0.7.1 reverts are no longer vendored).
+try:
+    import turbompc.solvers.admm.admm_cudss_ffi_backend  # noqa: E402,F401
+    _CUDSS_FFI_AVAILABLE = True
+except Exception as _cudss_exc:  # .so not built / cuDSS version mismatch
+    _CUDSS_FFI_AVAILABLE = False
+    print(f"[benchmark] cuDSS FFI unavailable ({type(_cudss_exc).__name__}: {_cudss_exc});\n"
+          f"            using pure-JAX backends. Build it in diffmpc2/ and pass --fwd/--bwd to use cuDSS.")
 
 NX, NU = 4, 1
 WEIGHT_KEYS = [
@@ -311,6 +318,16 @@ def run(args):
     print(f"JAX device: {dev} ({dev.platform})")
     fwd = parse_forward_backend(args.fwd)
     bwd = parse_backward_backend(args.bwd)
+    # Auto-fall-back to pure-JAX if a cuDSS FFI backend was requested but its .so is unavailable.
+    if not _CUDSS_FFI_AVAILABLE:
+        if "CUDSS" in fwd.name:
+            print(f"[benchmark] forward backend {fwd.name} needs cuDSS FFI (unavailable); "
+                  "falling back to admm_jax_loop_pcg.")
+            fwd = parse_forward_backend("admm_jax_loop_pcg")
+        if "CUDSS" in bwd.name:
+            print(f"[benchmark] backward backend {bwd.name} needs cuDSS FFI (unavailable); "
+                  "falling back to direct_jax_dense.")
+            bwd = parse_backward_backend("direct_jax_dense")
     sysspec = SYSTEMS[args.system]
     build, gen = sysspec["build"], sysspec["gen"]
     reward = make_reward(sysspec["ref_state"], sysspec["ref_control"])
@@ -445,8 +462,12 @@ def main():
                    help="SQP iteration CEILING (non-binding): high enough that SQP REACHES the set "
                         "tol_convergence (no early exit), not capped")
     p.add_argument("--admm_max_iter", type=int, default=1000)
-    p.add_argument("--fwd", type=str, default="admm_fused_cudss")
-    p.add_argument("--bwd", type=str, default="direct_cudss_ffi")
+    p.add_argument("--fwd", type=str, default="admm_fused_cudss",
+                   help="forward backend (default cuDSS FFI; needs build/ffi/*.so from a cuDSS-0.7.1 "
+                        "build of diffmpc2/. Auto-falls-back to admm_jax_loop_pcg if the .so is absent.)")
+    p.add_argument("--bwd", type=str, default="direct_cudss_ffi",
+                   help="backward backend (default cuDSS FFI; auto-falls-back to direct_jax_dense if "
+                        "the cuDSS .so is absent.)")
     p.add_argument("--use_full_hessian", action="store_true", default=True)
     p.add_argument("--save_results", action="store_true")
     p.add_argument("--calibrate", action="store_true", help="single K, 2 seeds, verbose")

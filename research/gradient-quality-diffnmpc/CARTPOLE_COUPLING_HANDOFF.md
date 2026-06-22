@@ -37,6 +37,26 @@ highly-nonlinear perturbation. **DECISION (user): keep the full pole-down swing-
 
 ## 2. Environment gotchas (CRITICAL — read before running)
 
+> **UPDATE 2026-06-22 — workspace consolidated; cuDSS rebuilt in `diffmpc2/`.** The
+> `diffmpc2-gradckpt` worktree was removed; `turbompc` now resolves from the single **`diffmpc2/`**
+> checkout (on `release-cleanup`, which carries the `cccba81` backward-Hessian fix). The benchmark's
+> path shim points there (`_SOLVER_ROOT`, not the old `_WORKTREE_ROOT`). cuDSS works again, BUT:
+> installed cuDSS is **0.7.1.6** while `release-cleanup` ships the cuDSS-**0.8** API (commit
+> `e19a687`, broken on sm_120). The 3 `.cu` files were reverted to the 0.7.1 (13-arg) API and the FFI
+> rebuilt — this revert is an **uncommitted working-tree change in `diffmpc2/`** (left uncommitted so
+> the vendored repo's history keeps matching origin). To restore it after a hard reset of `diffmpc2/`:
+> ```bash
+> cd diffmpc2 && git checkout e19a687^ -- \
+>   turbompc/solvers/admm/csrc/admm_cudss.cu \
+>   turbompc/solvers/backward/csrc/cudss_sparse_kkt.cu \
+>   turbompc/solvers/linear_systems_solvers/csrc/cudss_blktridi.cu
+> export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
+> cmake -S turbompc/solvers/csrc -B build/ffi -DCMAKE_BUILD_TYPE=Release && cmake --build build/ffi -j
+> ```
+> The benchmark also now **auto-falls-back to pure-JAX backends** (`admm_jax_loop_pcg` /
+> `direct_jax_dense`) with a printed warning if the cuDSS `.so` is absent, so it never hard-crashes.
+> The numbered items below describe the original gradckpt setup and are retained for history.
+
 The benchmark uses the **cuDSS FFI backends** (`fwd=admm_fused_cudss`, `bwd=direct_cudss_ffi`).
 Getting them to load is fiddly:
 

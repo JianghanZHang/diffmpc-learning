@@ -6,7 +6,8 @@ Step A (always): compute turbompc AD + converged-FD on the SHARED 128 samples
 Step B (if results/acados_grad.npz exists): build the 3-way cos/relmag table + verdict ->
    results/acados_comparison.md.
 
-Run LOCALLY (uses the turbompc gradckpt worktree via benchmark_cartpole_coupling's path shim).
+Run LOCALLY (resolves turbompc from the consolidated diffmpc2/ checkout via
+benchmark_cartpole_coupling's path shim).
 """
 import os
 import sys
