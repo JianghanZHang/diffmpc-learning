@@ -277,3 +277,47 @@ def test_task2_nlp_backward_unbounded_matches_turbompc_and_fd():
     assert _rel_l2(g_ad, g_tm) < 1e-3, f"AD vs TurboMPC rel_l2={_rel_l2(g_ad, g_tm)}"
     assert _cosine(g_ad, g_fd) > 1 - 1e-4, f"AD vs FD cos={_cosine(g_ad, g_fd)}"
     assert _rel_l2(g_ad, g_fd) < 1e-2, f"AD vs FD rel_l2={_rel_l2(g_ad, g_fd)}"
+
+
+# --------------------------------------------------------------------------- #
+# Task 3: NLP-level backward, BOUNDED (active) -> AD == FD of the SAME relaxed
+# solver, at BOTH kappa regimes. NOT compared to TurboMPC: the relaxed and hard
+# backwards legitimately differ by O(kappa) at active rows.
+# --------------------------------------------------------------------------- #
+def _bounded_cfg(target_kappa, kappa_anneal):
+    return dict(slack_weight=_GAMMA, target_kappa=target_kappa, conv_slack_weight=_GAMMA,
+                kappa_anneal=kappa_anneal, kappa_anneal_start=1e-3, kappa_anneal_factor=0.1,
+                linesearch=False, max_sqp_iter=60, tol=1e-5, jit_inner=True)
+
+
+def _nlp_ad_vs_fd_bounded(cfg):
+    solver, pp = _build_nlp_solver(umax=2.0)              # active control bounds
+    weights = {k: pp[k] for k in WEIGHT_KEYS}
+
+    res, dL_ad, info = central_path_nlp_grad(solver, pp, weights, _loss_grad, **cfg)
+    # Converged relaxed NLP-KKT: dynamics feasible + inner relaxed QP solved + SQP fixed point.
+    assert float(res["final_eq"]) < 1e-6
+    assert float(info["prim_res"]) < 1e-6
+    # Control bounds active -> W is genuinely exercised (not the interior limit).
+    assert float(jnp.max(jnp.abs(res["controls"]))) >= 0.99 * 2.0
+
+    g_ad = _flat(dL_ad, WEIGHT_KEYS)
+
+    def fwd_loss(w):
+        r = central_path_nlp_solve(solver, pp, w, **cfg)
+        return float(_loss(r["states"], r["controls"]))
+    g_fd, flagged = _fd_grad_weights(fwd_loss, weights, WEIGHT_KEYS)
+
+    assert not flagged, "FD did not plateau (relaxed map should be C1 at fixed kappa)"
+    assert _cosine(g_ad, g_fd) > 1 - 1e-3, f"AD vs FD cos={_cosine(g_ad, g_fd)}"
+    assert _rel_l2(g_ad, g_fd) < 1e-2, f"AD vs FD rel_l2={_rel_l2(g_ad, g_fd)}"
+
+
+def test_task3_nlp_backward_bounded_annealed_kappa():
+    # Annealed to small kappa (~1e-6): closest to the true solution; stiff W.
+    _nlp_ad_vs_fd_bounded(_bounded_cfg(target_kappa=1e-6, kappa_anneal=True))
+
+
+def test_task3_nlp_backward_bounded_fixed_kappa():
+    # Fixed moderate kappa (1e-4): smoother map, wider FD plateau.
+    _nlp_ad_vs_fd_bounded(_bounded_cfg(target_kappa=1e-4, kappa_anneal=False))
