@@ -16,6 +16,62 @@ from turbompc.solvers.qp_utils import ZShape  # noqa: E402
 from turbompc.solvers.linear_systems_solvers.backends import SchurSolverBackend, AdmmBackend  # noqa: E402
 from turbompc.solvers.linear_systems_solvers.schur_solver import make_schur_solver  # noqa: E402
 
+from benchmark_cartpole_coupling import build_cartpole_problem  # noqa: E402
+from turbompc.problems.optimal_control_problem import OptimalControlProblem  # noqa: E402
+from turbompc.solvers.turbompc_solver import TurboMPCSolver, ForwardBackend, BackwardBackend  # noqa: E402
+from turbompc.utils.load_params import load_solver_params  # noqa: E402
+from turbompc.solvers.admm.admm import ADMMSolver  # noqa: E402
+
+NX, NU = 4, 1
+_POLE_DOWN = jnp.array([0.0, 0.0, jnp.pi, 0.0])
+_GAMMA = 1.0e2  # slack penalty (soft box); large => approaches hard box
+
+
+def _cartpole_one_sided_qp(umax, slack_weight):
+    dynamics, pp = build_cartpole_problem(horizon=25, umax=umax, dt=0.04)
+    pp["initial_state"] = _POLE_DOWN
+    ocp = OptimalControlProblem(dynamics=dynamics, params=pp)
+    sp = load_solver_params("turbompc.yaml")
+    solver = TurboMPCSolver(
+        program=ocp, params=sp,
+        forward_backend=ForwardBackend.ADMM_JAX_LOOP_CUDSS_FFI,
+        backward_backend=BackwardBackend.ADMM_JAX_LOOP_CUDSS_FFI,
+    )
+    ig = solver.initial_guess(pp)
+    qp_two_sided = solver._build_qp_data(ig.states, ig.controls, pp)
+    return to_one_sided(qp_two_sided, slack_weight=slack_weight)
+
+
+def _soft_reference(qp, N, nx, nu, slack_weight):
+    """Current solver's quadratic-slack soft solution on the same one-sided QP.
+
+    For JAX_LOOP backend, the slack is controlled entirely by
+    qp.ineq.use_slack_variables and qp.ineq.slack_penalization_weight (set by
+    to_one_sided).  The slack_weight= kwarg to .solve() is ignored on this path
+    (it only matters for the fused CUDA backends); use_slack=True in the
+    ADMMSolver constructor likewise only affects fused backends, but we keep it
+    for clarity / forward-compatibility.
+    """
+    schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, nx, nu, pcg_params=_PCG)
+    ref = ADMMSolver(
+        zshape=ZShape(horizon=N, num_states=nx, num_controls=nu),
+        schur_solver=schur, pcg_params=_PCG,
+        sigma=1e-6, max_iter=50000, eps_abs=1e-11, eps_rel=1e-9,
+        rho_f_factor=1000.0, admm_backend=AdmmBackend.JAX_LOOP, use_slack=True,
+    )
+    (states, controls), stats, _ = ref.solve(qp, rho_bar=0.1, slack_weight=slack_weight)
+    return states, controls, stats
+
+
+def test_cartpole_soft_reference_converges_and_bound_engages():
+    qp = _cartpole_one_sided_qp(umax=2.0, slack_weight=_GAMMA)
+    assert qp.ineq.use_slack_variables is True
+    N = qp.cost.D.shape[0] - 1
+    states, controls, stats = _soft_reference(qp, N, NX, NU, _GAMMA)
+    assert int(stats.num_iter) > 0
+    # the swing-up pushes the control near/over the soft bound (slack engages)
+    assert float(jnp.max(jnp.abs(controls))) >= 0.9 * 2.0
+
 
 def test_retraction_map_complementarity_and_relu_limit():
     v = jnp.asarray(np.linspace(-5, 5, 21))
