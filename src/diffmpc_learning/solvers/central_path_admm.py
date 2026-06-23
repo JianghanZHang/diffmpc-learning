@@ -68,6 +68,12 @@ def solve_qp_central_path(
     qp_data MUST be one-sided (Gx <= u; use to_one_sided). Identical to TurboMPC's
     ADMM except the inequality z_g-update is `elastic_retraction` instead of a box
     projection. Over-relaxation alpha=1, no adaptive rho. Linear system: cuDSS Schur.
+
+    Returns ``(x_blocks, duals, info)`` where ``duals = (y_f_0, y_f_dyn, y_g)`` are the
+    converged ADMM duals: ``y_f_0`` the initial-equality dual ``(n0,)``, ``y_f_dyn`` the
+    dynamics-equality dual ``(N, nx)``, and ``y_g`` the one-sided inequality dual with the
+    stacked shape ``(N+1, 2m)`` (upper rows then lower rows from to_one_sided). ``info``
+    keys are unchanged (``iters``, ``delta``, ``prim_res``, ``xi_max``).
     """
     dtype = qp_data.cost.q.dtype
     Np1, n = qp_data.cost.D.shape[0], qp_data.cost.D.shape[1]
@@ -116,9 +122,10 @@ def solve_qp_central_path(
         delta = jnp.maximum(_inf_norm(x_new - x), _inf_norm(z_g_new - z_g))
         return (it + 1, x_new, y_g_new, y_f_0_new, y_f_dyn_new, z_g_new, delta, xi_max)
 
-    it, x, _, _, _, z_g, delta, xi_max = jax.lax.while_loop(cond, body, init)
+    it, x, y_g, y_f_0, y_f_dyn, z_g, delta, xi_max = jax.lax.while_loop(cond, body, init)
     Cx0, Cx = _apply_C_parts(qp_data, x)
     prim = jnp.maximum(_inf_norm(Cx0 - qp_data.eq.c0), _inf_norm(Cx - qp_data.eq.c))
     if m:
         prim = jnp.maximum(prim, _inf_norm(_apply_G(qp_data, x) - z_g))
-    return x, {"iters": it, "delta": delta, "prim_res": prim, "xi_max": xi_max}
+    duals = (y_f_0, y_f_dyn, y_g)  # converged equality (init + dynamics) and one-sided ineq duals
+    return x, duals, {"iters": it, "delta": delta, "prim_res": prim, "xi_max": xi_max}

@@ -124,8 +124,8 @@ def test_central_path_loop_converges_on_cudss():
     qp, N, nx, nu = _toy_qp(bound=0.05)
     qp1 = to_one_sided(qp, slack_weight=1e2)
     schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, nx, nu, pcg_params=_PCG)
-    x, info = solve_qp_central_path(qp1, schur, target_kappa=1e-4, slack_weight=1e2,
-                                    rho_bar=0.1, max_iter=20000, tol=1e-10)
+    x, _, info = solve_qp_central_path(qp1, schur, target_kappa=1e-4, slack_weight=1e2,
+                                       rho_bar=0.1, max_iter=20000, tol=1e-10)
     assert float(info["prim_res"]) < 1e-6        # dynamics + consensus feasible
     assert int(info["iters"]) < 20000            # converged before the cap
     assert jnp.all(jnp.isfinite(x))
@@ -140,8 +140,8 @@ def test_central_path_matches_soft_solver_as_kappa_to_zero():
     schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, NX, NU, pcg_params=_PCG)
     errs = {}
     for kappa in (1e-2, 1e-4, 1e-6):
-        x_cp, info = solve_qp_central_path(qp, schur, target_kappa=kappa, slack_weight=_GAMMA,
-                                           rho_bar=0.1, max_iter=50000, tol=1e-11)
+        x_cp, _, info = solve_qp_central_path(qp, schur, target_kappa=kappa, slack_weight=_GAMMA,
+                                              rho_bar=0.1, max_iter=50000, tol=1e-11)
         assert float(info["prim_res"]) < 1e-6, f"central-path did not converge at kappa={kappa}"
         errs[kappa] = float(jnp.max(jnp.abs(x_cp - xref)))
 
@@ -156,8 +156,8 @@ def test_bare_barrier_recovers_hard_box():
     states_ref, controls_ref, _ = _soft_reference(qp, N, NX, NU, 1e8)  # soft with huge gamma ~ hard
     xref = jnp.concatenate([states_ref, controls_ref], axis=-1)
     schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, NX, NU, pcg_params=_PCG)
-    x_cp, info = solve_qp_central_path(qp, schur, target_kappa=1e-6, slack_weight=1e8,
-                                       rho_bar=0.1, max_iter=50000, tol=1e-11)
+    x_cp, _, info = solve_qp_central_path(qp, schur, target_kappa=1e-6, slack_weight=1e8,
+                                          rho_bar=0.1, max_iter=50000, tol=1e-11)
     assert float(info["prim_res"]) < 1e-6
     assert float(jnp.max(jnp.abs(x_cp - xref))) < 1e-4
     assert float(info["xi_max"]) < 1e-3                              # slack ~ off at huge gamma
