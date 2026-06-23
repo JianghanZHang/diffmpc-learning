@@ -6,11 +6,10 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from central_path_admm import retraction_map, elastic_retraction  # noqa: E402
-from central_path_admm import to_one_sided, solve_qp_central_path  # noqa: E402
+from diffmpc_learning.solvers.central_path_admm import to_one_sided, solve_qp_central_path  # noqa: E402
+from diffmpc_learning.solvers.retraction import retraction_map, elastic_retraction  # noqa: E402
 
-from tests.helpers.problem_fixtures import cost_blocks_from_qr  # noqa: E402
+from helpers import cost_blocks_from_qr  # noqa: E402
 from turbompc.solvers.qp_data import qpdata_from_ocp_blocks  # noqa: E402
 from turbompc.solvers.qp_utils import ZShape  # noqa: E402
 from turbompc.solvers.linear_systems_solvers.backends import SchurSolverBackend, AdmmBackend  # noqa: E402
