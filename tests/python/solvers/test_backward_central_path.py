@@ -80,8 +80,8 @@ def _rel_l2(a, b):
     return float(np.linalg.norm(a - b) / (np.linalg.norm(b) + 1e-30))
 
 
-def _fd_grad_weights(loss_of_w, weights, keys, eps_seq=(1e-2, 1e-3, 1e-4),
-                     plateau_rtol=2e-2, atol=1e-7):
+def _fd_grad_weights(loss_of_w, weights, keys, eps_seq=(1e-3, 3e-4, 1e-4),
+                     plateau_rtol=1e-3, atol=1e-7):
     """Convergence-checked central-diff gradient of a scalar loss over a weights dict.
 
     Returns (flat_grad, flagged_any). Per scalar entry: decreasing eps; the largest eps
@@ -308,8 +308,8 @@ def test_task2_nlp_backward_unbounded_matches_turbompc_and_fd():
     assert not flagged, "FD did not plateau (unexpected discontinuity in interior NLP)"
     assert _cosine(g_ad, g_tm) > 1 - 1e-5, f"AD vs TurboMPC cos={_cosine(g_ad, g_tm)}"
     assert _rel_l2(g_ad, g_tm) < 1e-3, f"AD vs TurboMPC rel_l2={_rel_l2(g_ad, g_tm)}"
-    assert _cosine(g_ad, g_fd) > 1 - 1e-4, f"AD vs FD cos={_cosine(g_ad, g_fd)}"
-    assert _rel_l2(g_ad, g_fd) < 1e-2, f"AD vs FD rel_l2={_rel_l2(g_ad, g_fd)}"
+    assert _cosine(g_ad, g_fd) > 1 - 1e-6, f"AD vs FD cos={_cosine(g_ad, g_fd)}"
+    assert _rel_l2(g_ad, g_fd) < 1e-3, f"AD vs FD rel_l2={_rel_l2(g_ad, g_fd)}"
 
 
 # --------------------------------------------------------------------------- #
@@ -342,8 +342,8 @@ def _nlp_ad_vs_fd_bounded(cfg):
     g_fd, flagged = _fd_grad_weights(fwd_loss, weights, WEIGHT_KEYS)
 
     assert not flagged, "FD did not plateau (relaxed map should be C1 at fixed kappa)"
-    assert _cosine(g_ad, g_fd) > 1 - 1e-3, f"AD vs FD cos={_cosine(g_ad, g_fd)}"
-    assert _rel_l2(g_ad, g_fd) < 1e-2, f"AD vs FD rel_l2={_rel_l2(g_ad, g_fd)}"
+    assert _cosine(g_ad, g_fd) > 1 - 1e-5, f"AD vs FD cos={_cosine(g_ad, g_fd)}"
+    assert _rel_l2(g_ad, g_fd) < 2e-3, f"AD vs FD rel_l2={_rel_l2(g_ad, g_fd)}"
 
 
 def test_task3_nlp_backward_bounded_annealed_kappa():
