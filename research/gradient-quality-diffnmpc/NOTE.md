@@ -232,8 +232,40 @@ useful for RL training.
 >   before trusting it. (E1.2's direction finding F1 and the obstacle non-convergence entanglement F2 are
 >   independent of this fix and stand.)
 
-Remaining E1.x: **E1.3** slack on/off ablation (test H1.2); **E1.4** near-degeneracy probe (KKT
-conditioning); **E1.5** training-time robustness (do active-set crossings spike loss/grad-norm?).
+> **Built 2026-06-23 — κ-relaxed (central-path) backward / VJP for the inequality-constrained NMPC
+> layer (RQ1 candidate-contribution #2; H1.2 enabler).** New solver package `src/diffmpc_learning/`
+> (branch `central-path-admm`): a central-path ADMM forward (closed-form elastic log-barrier
+> retraction, cuDSS Schur) + SQP outer loop, and now a **κ-relaxed retraction-KKT backward**
+> (`solvers/backward.py`). It differentiates the *same* relaxed fixed point the forward converges to:
+> per one-sided row, relaxed complementarity `s·y_g = κ` with barrier slack `s = h − Gx + y_g/γ`,
+> folded into the reduced symmetric KKT via the smooth per-row weight `W = y_g/(s + y_g/γ)` — the C¹
+> analogue of TurboMPC's hard active-set mask (inactive `W→0`, soft-active `W→γ`, hard-active `W→∞`).
+> Exact Lagrangian Hessian reused (`D + λᵀ∇²f` via `get_dynamics_lagrangian_hessian`, the post-`cccba81`
+> term). Tests: `tests/python/solvers/test_backward_central_path.py` (5, GPU/cuDSS, x64); a whole-branch
+> adversarial review re-derived `W` from the IFT and confirmed every sign (sign-flip/zeroing probes
+> rejected by the FD tests).
+>
+> - **Correctness verified against two independent ground truths at a converged NLP-KKT (cartpole swing-up).**
+>   (i) QP-level VJP vs convergence-checked FD on the bounded one-sided QP (active control bounds → `W`
+>   exercised): rel-ℓ∞ < 1e-4 on `dL/dq`, `dL/dD`, `dL/dE`. (ii) **Interior** NLP (`umax=50`, bounds present
+>   but inactive → `W≈9e-11`): the relaxed backward matches the **unrelaxed TurboMPC** backward to `cos=1.0`,
+>   `rel-ℓ₂≈2e-8`, and convergence-checked FD (`rel-ℓ₂<1e-3`) — pinning the exact-Hessian construction and
+>   all multiplier signs. (iii) **Bounded** NLP (`umax=2`, control bound active): `dL/dweights` matches
+>   convergence-checked FD of the *same* relaxed solver (`cos>1−1e-5`, `rel-ℓ₂<2e-3`) at **both** κ regimes
+>   (annealed→1e-6 and fixed 1e-4); a per-eps sweep confirms **FD(eps→0) = AD to 7 digits** on the
+>   active-bound `dL/dR` (the apparent gap at coarse eps was an FD truncation artifact, not a backward bias
+>   — CLAUDE.md FD caveat). [Differentiable parameter = cost weights (Q,R); loss = pole-up tracking.]
+> - **What this establishes vs. what it does not (per CLAUDE.md, report-only-what-was-measured).**
+>   *Established:* the κ-relaxed backward is a **correct** gradient of the relaxed solver (= FD where the map
+>   is C¹) and **reduces to the exact unrelaxed gradient in the interior** (= TurboMPC). *Not yet measured:*
+>   that the relaxed gradient is **smoother / better-conditioned across an active-set boundary** than the hard
+>   backward — that is the design rationale (H1.2; IP-smoothing `[Frey2025]`) and the **next experiment**.
+>   No RL-training, variance, or obstacle-constraint claim is made yet.
+
+Remaining E1.x: **E1.3** slack on/off ablation (test H1.2; the central-path backward is now the tool for it);
+**E1.4** near-degeneracy probe (KKT conditioning); **E1.5** training-time robustness (do active-set crossings
+spike loss/grad-norm?); **E1.7** across-active-set smoothness of the κ-relaxed backward (relaxed-AD vs
+hard-AD vs FD continuity through an activation) — the not-yet-measured H1.2 payoff above.
 
 ---
 
@@ -461,3 +493,15 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   Caveat logged: E1.2's obstacle *magnitude* numbers predate the fix and only ever measured direction vs FD →
   re-run with per-sample adaptive FD on the fixed backward. Repo housekeeping (same day): solver consolidated to
   a single `diffmpc2/` on `release-cleanup` (carries `cccba81`); the research workspace was put under its own git.
+- **2026-06-23** — Built the **κ-relaxed (central-path) backward / VJP** for the inequality-constrained NMPC
+  layer (new `src/diffmpc_learning/` package, branch `central-path-admm`; forward + NLP-KKT convergence were
+  built earlier this session). The reduced retraction-KKT folds inequalities into the Hessian via the smooth
+  weight `W = y_g/(s + y_g/γ)` (C¹ analogue of the hard active-set mask; reuses the exact `λᵀ∇²f` Lagrangian
+  Hessian). Verified at a converged NLP-KKT on cartpole: QP-VJP vs FD (`dL/d{q,D,E}`, rel-ℓ∞<1e-4);
+  **interior** NLP (`umax=50`, bounds inactive) AD == unrelaxed TurboMPC (`cos=1.0`, `rel-ℓ₂≈2e-8`) == FD;
+  **bounded** NLP (`umax=2`, active) AD == FD of the *same* relaxed solver (`cos>1−1e-5`, `rel-ℓ₂<2e-3`) at
+  both κ regimes (annealed→1e-6, fixed 1e-4), with a per-eps sweep confirming FD(eps→0)=AD to 7 digits.
+  Whole-branch adversarial review (re-derived `W` from the IFT, sign-flip/zeroing probes) found **no gradient
+  bug**; closed its flagged test-coverage gaps (interior W path, `dL/dE`, nontrivial-D guard). Establishes
+  backward *correctness*; the across-active-set *smoothness* advantage (H1.2) is the next measurement (E1.7).
+  Tests: `tests/python/solvers/test_backward_central_path.py` (5/5; full suite 14/14).
