@@ -202,12 +202,34 @@ def test_task1_qp_relaxed_kkt_vjp_matches_fd_bounded():
         return jnp.sum(x_bar * x)
 
     D0 = qp1.cost.D
-    d_idx = [(0, 0, 0), (8, NX, NX), (20, 2, 2)]  # diagonal entries
+    d_idx = [(8, NX, NX), (20, 2, 2), (12, 0, 0), (3, 1, 1)]  # nontrivial diagonal entries
+    n_nontrivial = 0
     for (t, i, j) in d_idx:
         fd, ok = _converged_fd(loss_D, D0, (t, i, j))
         assert ok, f"FD did not plateau for D[{t},{i},{j}]"
         ad = float(dL_dD[t, i, j])
         assert abs(ad - fd) <= 1e-3 * abs(fd) + 2e-6, f"dL/dD[{t},{i},{j}]: AD={ad:.6e} FD={fd:.6e}"
+        n_nontrivial += abs(fd) > 1e-4
+    assert n_nontrivial >= 2, "expected several nontrivial dL/dD entries"
+
+    # E (off-diagonal cost coupling): E==0 in the cartpole cost but dL/dE is nontrivial
+    # (x* != 0). Perturb an E entry, re-solve. Validates the E branch of the cost VJP.
+    @jax.jit
+    def loss_E(E):
+        qp = dataclasses.replace(qp1, cost=QPCostBlocks(qp1.cost.D, E, qp1.cost.q))
+        x, _, _ = solve_qp_central_path(qp, schur, target_kappa=kappa, slack_weight=_GAMMA, **_CP)
+        return jnp.sum(x_bar * x)
+
+    E0 = qp1.cost.E
+    e_idx = [(5, 0, 0), (10, NX, 1), (15, 2, NX)]
+    n_e_nontrivial = 0
+    for (t, i, j) in e_idx:
+        fd, ok = _converged_fd(loss_E, E0, (t, i, j))
+        assert ok, f"FD did not plateau for E[{t},{i},{j}]"
+        ad = float(dL_dE[t, i, j])
+        assert abs(ad - fd) <= 1e-3 * abs(fd) + 2e-6, f"dL/dE[{t},{i},{j}]: AD={ad:.6e} FD={fd:.6e}"
+        n_e_nontrivial += abs(fd) > 1e-4
+    assert n_e_nontrivial >= 1, "expected a nontrivial dL/dE entry"
 
 
 def test_task1_custom_vjp_wrapper_matches_direct_vjp():
@@ -245,7 +267,11 @@ _NLP_HARD = dict(slack_weight=_HARD_GAMMA, target_kappa=1e-7, conv_slack_weight=
 
 
 def test_task2_nlp_backward_unbounded_matches_turbompc_and_fd():
-    solver, pp = _build_nlp_solver(umax=1.0e7)            # interior: no active bounds
+    # umax=50: control bounds PRESENT (one-sided rows m>0) but INACTIVE (swing-up needs
+    # |u|~17 < 50), so this genuinely exercises the inequality path in the interior limit
+    # W->0 (vs umax=1e7, which drops the rows entirely, m=0). AD must equal the unrelaxed
+    # TurboMPC backward (no active rows) and FD.
+    solver, pp = _build_nlp_solver(umax=50.0)
     weights = {k: pp[k] for k in WEIGHT_KEYS}
 
     # AD: our relaxed NLP backward.
@@ -254,8 +280,15 @@ def test_task2_nlp_backward_unbounded_matches_turbompc_and_fd():
     assert float(res["final_stationarity"]) < 1e-4
     assert float(res["final_eq"]) < 1e-4
     assert float(res["final_ineq"]) < 1e-4
-    # Unbounded => relaxed weight W ~ 0 everywhere (interior limit).
+    # Confirm the inequality path is exercised (m>0) AND interior (bounds inactive => W~0).
     qp1 = to_one_sided(solver._build_qp_data(res["states"], res["controls"], pp), _HARD_GAMMA)
+    assert qp1.ineq.G.shape[1] > 0, "expected nonempty inequality rows (umax finite)"
+    assert float(jnp.max(jnp.abs(res["controls"]))) < 50.0       # interior: no active bound
+    schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, solver.program.horizon, NX, NU, pcg_params=_PCG)
+    _xs, _du, _ = solve_qp_central_path(qp1, schur, target_kappa=float(res["kappas"][-1]),
+                                        slack_weight=_HARD_GAMMA, **_CP)
+    W = relaxed_complementarity_weight(qp1, _xs, _du[2], _HARD_GAMMA)
+    assert float(jnp.max(W)) < 1e-6, "interior limit: W should be ~0 on inactive rows"
     g_ad = _flat(dL_ad, WEIGHT_KEYS)
 
     # Ground truth A: unrelaxed TurboMPC backward (exact dense KKT).
