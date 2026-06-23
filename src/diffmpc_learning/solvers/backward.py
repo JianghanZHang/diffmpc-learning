@@ -34,8 +34,11 @@ from turbompc.solvers.qp_data import (  # noqa: E402
 )
 from turbompc.solvers.qp_utils import ZShape, pack_x  # noqa: E402
 from turbompc.solvers.backward.backward_kkt_jax import solve_backward_kkt  # noqa: E402
+from turbompc.solvers.linear_systems_solvers.backends import SchurSolverBackend  # noqa: E402
+from turbompc.solvers.linear_systems_solvers.schur_solver import make_schur_solver  # noqa: E402
 
-from .central_path_admm import solve_qp_central_path  # noqa: E402
+from .central_path_admm import to_one_sided, solve_qp_central_path  # noqa: E402
+from .sqp import sqp_central_path, _PCG  # noqa: E402
 
 
 # ----------------------------------------------------------------------------- #
@@ -150,3 +153,80 @@ def make_qp_central_path_diff(qp1, schur_solver, *, slack_weight, **cp_kwargs):
 
     solve.defvjp(solve_fwd, solve_bwd)
     return solve
+
+
+# ----------------------------------------------------------------------------- #
+# NLP-level backward (exact Lagrangian Hessian + relaxed inequality)
+# ----------------------------------------------------------------------------- #
+def central_path_nlp_solve(solver, problem_params, weights, *, slack_weight, target_kappa,
+                           **sqp_kwargs):
+    """Run ``sqp_central_path`` on the weighted problem; return the forward result dict.
+
+    ``weights`` is merged into ``problem_params`` via ``make_params_with_weights`` (the
+    same merge TurboMPC uses), so the same call serves both the analytic solve and the
+    finite-difference loss.
+    """
+    pp_w = solver.make_params_with_weights(weights, problem_params)
+    return sqp_central_path(solver, pp_w, slack_weight=slack_weight,
+                            target_kappa=target_kappa, **sqp_kwargs)
+
+
+def central_path_nlp_grad(solver, problem_params, weights, loss_grad_fn, *,
+                          slack_weight, target_kappa, rho_bar=0.1,
+                          cp_max_iter=50000, cp_tol=1.0e-11, **sqp_kwargs):
+    """``dL/dweights`` at the converged NLP solution of the central-path SQP.
+
+    Differentiates the *relaxed* NLP-KKT at the converged primal-dual point:
+
+      1. run ``sqp_central_path`` (weighted) to a converged NLP-KKT;
+      2. re-solve the inner QP once at the converged iterate (final kappa) for a
+         consistent ``(x*, duals)``;
+      3. backward Hessian = exact Lagrangian Hessian (``D + lambda^T nabla^2 f`` via
+         ``get_dynamics_lagrangian_hessian``) ``+ G1^T diag(W) G1`` (relaxed inequality);
+      4. solve the reduced KKT for ``lam_x``; weight gradient
+         ``dL/dw = - d/dw [ sum grad_cost(x*; w) . lam_x ]`` (cost-only mixed partial).
+
+    ``loss_grad_fn(states, controls) -> (dL_dstates, dL_dcontrols)``. Returns
+    ``(res, dL_dweights, info)`` where ``res`` is the forward dict and ``info`` the
+    re-solve diagnostics.
+    """
+    program = solver.program
+    nx = program.num_state_variables
+    nu = program.num_control_variables
+    N = program.horizon
+
+    pp_w = solver.make_params_with_weights(weights, problem_params)
+    res = sqp_central_path(solver, pp_w, slack_weight=slack_weight, target_kappa=target_kappa,
+                           rho_bar=rho_bar, cp_max_iter=cp_max_iter, cp_tol=cp_tol, **sqp_kwargs)
+    states_c, controls_c = res["states"], res["controls"]
+    final_kappa = float(res["kappas"][-1])
+
+    # (2) consistent primal-dual at the converged linearization.
+    schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, nx, nu, pcg_params=_PCG)
+    qp = solver._build_qp_data(states_c, controls_c, pp_w)
+    qp1 = to_one_sided(qp, slack_weight)
+    x_star, duals, info = solve_qp_central_path(
+        qp1, schur, target_kappa=final_kappa, slack_weight=slack_weight,
+        rho_bar=rho_bar, max_iter=cp_max_iter, tol=cp_tol)
+    _, y_f_dyn, y_g_stacked = duals
+
+    # (3) exact Lagrangian Hessian + relaxed inequality fold.
+    dyn_hess = program.get_dynamics_lagrangian_hessian(states_c, controls_c, pp_w, y_f_dyn)
+    D_full = qp1.cost.D + dyn_hess
+    W = relaxed_complementarity_weight(qp1, x_star, y_g_stacked, slack_weight)
+    D_aug = augment_D_with_relaxed_ineq(D_full, qp1.ineq.G, W)
+
+    # (4) adjoint solve + cost-only weight gradient.
+    dL_dstates, dL_dcontrols = loss_grad_fn(states_c, controls_c)
+    x_bar = pack_x(dL_dstates, dL_dcontrols)
+    lam_x = solve_reduced_relaxed_kkt(D_aug, qp1.cost.E, qp1.eq, x_bar)
+    lam_states, lam_controls = lam_x[:, :nx], lam_x[:, nx:]
+
+    def contracted(w):
+        params = solver.make_params_with_weights(w, problem_params)
+        fx, fu = jax.grad(
+            lambda s, c: program.cost(s, c, params), argnums=(0, 1))(states_c, controls_c)
+        return jnp.sum(fx * lam_states) + jnp.sum(fu * lam_controls)
+
+    dL_dweights = jax.tree_util.tree_map(lambda g: -g, jax.grad(contracted)(weights))
+    return res, dL_dweights, info

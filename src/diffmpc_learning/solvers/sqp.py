@@ -13,6 +13,7 @@ solver lets SQP converge the nonlinear problem for both the hard-box and soft-bo
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -68,6 +69,7 @@ def sqp_central_path(
     kappa_anneal=False,
     kappa_anneal_start=1e-3,
     kappa_anneal_factor=0.1,
+    jit_inner=False,
     verbose=False,
 ):
     """SQP outer loop with the central-path ADMM inner QP solver on the nonlinear OCP.
@@ -100,6 +102,21 @@ def sqp_central_path(
 
     schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, nx, nu, pcg_params=_PCG)
 
+    # The inner solve's lax.while_loop is re-traced on every eager call; jitting it
+    # (compiled once, reused across all SQP iters / kappa values) is numerically
+    # identical but ~10x faster, which makes per-iteration backward FD tractable.
+    if jit_inner:
+        @functools.partial(jax.jit, static_argnums=(1,))
+        def _inner(qp_data, schur_solver, kappa):
+            return solve_qp_central_path(
+                qp_data, schur_solver, target_kappa=kappa, slack_weight=slack_weight,
+                rho_bar=rho_bar, max_iter=cp_max_iter, tol=cp_tol)
+    else:
+        def _inner(qp_data, schur_solver, kappa):
+            return solve_qp_central_path(
+                qp_data, schur_solver, target_kappa=kappa, slack_weight=slack_weight,
+                rho_bar=rho_bar, max_iter=cp_max_iter, tol=cp_tol)
+
     conv_history = []
     alphas = []
     kappas = []
@@ -120,10 +137,8 @@ def sqp_central_path(
 
         # 2) one-sided slack reformulation; 3) central-path ADMM inner solve.
         qp1 = to_one_sided(qp, slack_weight)
-        x_new, (y_f_0, y_f_dyn, y_g_stacked), cp_info = solve_qp_central_path(
-            qp1, schur, target_kappa=kappa, slack_weight=slack_weight,
-            rho_bar=rho_bar, max_iter=cp_max_iter, tol=cp_tol,
-        )
+        x_new, (y_f_0, y_f_dyn, y_g_stacked), cp_info = _inner(
+            qp1, schur, jnp.asarray(kappa, states.dtype))
 
         # 4) unpack candidate primal.
         states_new = x_new[:, :nx]

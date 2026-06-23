@@ -19,6 +19,8 @@ from diffmpc_learning.solvers.backward import (
     relaxed_complementarity_weight,
     qp_central_path_cost_vjp,
     make_qp_central_path_diff,
+    central_path_nlp_solve,
+    central_path_nlp_grad,
 )
 
 from turbompc.solvers.qp_data import QPCostBlocks
@@ -33,9 +35,83 @@ from turbompc.utils.load_params import load_solver_params
 
 NX, NU = 4, 1
 _POLE_DOWN = jnp.array([0.0, 0.0, jnp.pi, 0.0])
+_POLE_UP = jnp.array([0.0, 0.0, 0.0, 0.0])
 _GAMMA = 1.0e2
+_HARD_GAMMA = 1.0e8
 _PCG = {"max_iter": 400, "tol_epsilon": 1.0e-12}
 _CP = dict(rho_bar=0.1, max_iter=50000, tol=1.0e-11)
+WEIGHT_KEYS = [
+    "weights_penalization_reference_state_trajectory",  # Q diag (4)
+    "weights_penalization_control_squared",             # R diag (1)
+]
+# Fixed NLP loss: track pole-up; cotangents are explicit.
+def _loss(states, controls):
+    return 0.5 * jnp.sum((states - _POLE_UP) ** 2) + 0.5e-2 * jnp.sum(controls ** 2)
+def _loss_grad(states, controls):
+    return jax.grad(_loss, argnums=(0, 1))(states, controls)
+
+
+def _build_nlp_solver(umax, horizon=12):
+    # horizon=12: full backward machinery, but each forward is ~2-3s warm (jit_inner),
+    # making convergence-checked FD over all weights tractable. AD==TurboMPC is
+    # horizon-independent (verified). umax=1e7 -> interior; umax=2 -> bounds active.
+    dynamics, pp = build_cartpole_problem(horizon=horizon, umax=umax, dt=0.04)
+    pp["initial_state"] = _POLE_DOWN
+    ocp = OptimalControlProblem(dynamics=dynamics, params=pp)
+    sp = dict(load_solver_params("turbompc.yaml"))
+    sp["num_sqp_iteration_max"] = 60
+    solver = TurboMPCSolver(
+        program=ocp, params=sp,
+        forward_backend=ForwardBackend.ADMM_JAX_LOOP_CUDSS_FFI,
+        backward_backend=BackwardBackend.DIRECT_JAX_DENSE,   # exact dense KKT ground truth
+    )
+    return solver, pp
+
+
+def _flat(d, keys):
+    return np.concatenate([np.asarray(d[k]).reshape(-1) for k in keys])
+
+
+def _cosine(a, b):
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+
+def _rel_l2(a, b):
+    return float(np.linalg.norm(a - b) / (np.linalg.norm(b) + 1e-30))
+
+
+def _fd_grad_weights(loss_of_w, weights, keys, eps_seq=(1e-2, 1e-3, 1e-4),
+                     plateau_rtol=2e-2, atol=1e-7):
+    """Convergence-checked central-diff gradient of a scalar loss over a weights dict.
+
+    Returns (flat_grad, flagged_any). Per scalar entry: decreasing eps; the largest eps
+    agreeing with the next-smaller (rel OR abs) is the plateau value; entries with no
+    plateau are flagged (would indicate a discontinuity / noise floor).
+    """
+    base = {k: np.array(weights[k], dtype=float) for k in keys}
+    grad, flagged = [], False
+    for k in keys:
+        arr = base[k]
+        gk = np.zeros(arr.size)
+        for i in range(arr.size):
+            vals = []
+            for eps in eps_seq:
+                wp = {kk: jnp.asarray(base[kk]) for kk in keys}
+                wm = {kk: jnp.asarray(base[kk]) for kk in keys}
+                ap = arr.copy().reshape(-1); ap[i] += eps
+                am = arr.copy().reshape(-1); am[i] -= eps
+                wp[k] = jnp.asarray(ap.reshape(arr.shape))
+                wm[k] = jnp.asarray(am.reshape(arr.shape))
+                vals.append((loss_of_w(wp) - loss_of_w(wm)) / (2 * eps))
+            chosen, ok = vals[-1], False
+            for a, b in zip(vals[:-1], vals[1:]):
+                if abs(a - b) <= plateau_rtol * abs(b) + atol:
+                    chosen, ok = a, True
+                    break
+            flagged = flagged or (not ok)
+            gk[i] = chosen
+        grad.append(gk)
+    return np.concatenate(grad), flagged
 
 
 def _cartpole_one_sided_qp(umax, slack_weight):
@@ -158,3 +234,46 @@ def test_task1_custom_vjp_wrapper_matches_direct_vjp():
     assert float(jnp.max(jnp.abs(dL_dq - dL_dq_ref))) < 1e-8
     assert float(jnp.max(jnp.abs(dL_dD - dL_dD_ref))) < 1e-8
     assert float(jnp.max(jnp.abs(dL_dE - dL_dE_ref))) < 1e-8
+
+
+# --------------------------------------------------------------------------- #
+# Task 2: NLP-level backward, UNBOUNDED (interior) -> AD == TurboMPC == FD
+# --------------------------------------------------------------------------- #
+_NLP_HARD = dict(slack_weight=_HARD_GAMMA, target_kappa=1e-7, conv_slack_weight=None,
+                 kappa_anneal=True, kappa_anneal_start=1e-3, kappa_anneal_factor=0.1,
+                 linesearch=False, max_sqp_iter=60, tol=1e-5, jit_inner=True)
+
+
+def test_task2_nlp_backward_unbounded_matches_turbompc_and_fd():
+    solver, pp = _build_nlp_solver(umax=1.0e7)            # interior: no active bounds
+    weights = {k: pp[k] for k in WEIGHT_KEYS}
+
+    # AD: our relaxed NLP backward.
+    res, dL_ad, info = central_path_nlp_grad(
+        solver, pp, weights, _loss_grad, **_NLP_HARD)
+    assert float(res["final_stationarity"]) < 1e-4
+    assert float(res["final_eq"]) < 1e-4
+    assert float(res["final_ineq"]) < 1e-4
+    # Unbounded => relaxed weight W ~ 0 everywhere (interior limit).
+    qp1 = to_one_sided(solver._build_qp_data(res["states"], res["controls"], pp), _HARD_GAMMA)
+    g_ad = _flat(dL_ad, WEIGHT_KEYS)
+
+    # Ground truth A: unrelaxed TurboMPC backward (exact dense KKT).
+    ig = solver.initial_guess(pp)
+    def tm_loss(w):
+        sol = solver.solve(ig, pp, w)
+        return _loss(sol.states, sol.controls)
+    dL_tm = jax.grad(tm_loss)(weights)
+    g_tm = _flat(dL_tm, WEIGHT_KEYS)
+
+    # Ground truth B: convergence-checked FD of OUR forward solver.
+    def fwd_loss(w):
+        r = central_path_nlp_solve(solver, pp, w, **_NLP_HARD)
+        return float(_loss(r["states"], r["controls"]))
+    g_fd, flagged = _fd_grad_weights(fwd_loss, weights, WEIGHT_KEYS)
+
+    assert not flagged, "FD did not plateau (unexpected discontinuity in interior NLP)"
+    assert _cosine(g_ad, g_tm) > 1 - 1e-5, f"AD vs TurboMPC cos={_cosine(g_ad, g_tm)}"
+    assert _rel_l2(g_ad, g_tm) < 1e-3, f"AD vs TurboMPC rel_l2={_rel_l2(g_ad, g_tm)}"
+    assert _cosine(g_ad, g_fd) > 1 - 1e-4, f"AD vs FD cos={_cosine(g_ad, g_fd)}"
+    assert _rel_l2(g_ad, g_fd) < 1e-2, f"AD vs FD rel_l2={_rel_l2(g_ad, g_fd)}"
