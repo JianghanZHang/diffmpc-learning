@@ -130,3 +130,35 @@ def test_central_path_loop_converges_on_cudss():
     assert float(info["prim_res"]) < 1e-6        # dynamics + consensus feasible
     assert int(info["iters"]) < 20000            # converged before the cap
     assert jnp.all(jnp.isfinite(x))
+
+
+def test_central_path_matches_soft_solver_as_kappa_to_zero():
+    qp = _cartpole_one_sided_qp(umax=2.0, slack_weight=_GAMMA)
+    N = qp.cost.D.shape[0] - 1
+    states_ref, controls_ref, _ = _soft_reference(qp, N, NX, NU, _GAMMA)
+    xref = jnp.concatenate([states_ref, controls_ref], axis=-1)   # (N+1, nx+nu)
+
+    schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, NX, NU, pcg_params=_PCG)
+    errs = {}
+    for kappa in (1e-2, 1e-4, 1e-6):
+        x_cp, info = solve_qp_central_path(qp, schur, target_kappa=kappa, slack_weight=_GAMMA,
+                                           rho_bar=0.1, max_iter=50000, tol=1e-11)
+        assert float(info["prim_res"]) < 1e-6, f"central-path did not converge at kappa={kappa}"
+        errs[kappa] = float(jnp.max(jnp.abs(x_cp - xref)))
+
+    # error -> 0 monotonically as kappa -> 0 (central path -> the SAME soft solution)
+    assert errs[1e-2] > errs[1e-4] > errs[1e-6]
+    assert errs[1e-6] < 1e-4
+
+
+def test_bare_barrier_recovers_hard_box():
+    qp = _cartpole_one_sided_qp(umax=2.0, slack_weight=1e8)          # gamma huge => ~hard
+    N = qp.cost.D.shape[0] - 1
+    states_ref, controls_ref, _ = _soft_reference(qp, N, NX, NU, 1e8)  # soft with huge gamma ~ hard
+    xref = jnp.concatenate([states_ref, controls_ref], axis=-1)
+    schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, NX, NU, pcg_params=_PCG)
+    x_cp, info = solve_qp_central_path(qp, schur, target_kappa=1e-6, slack_weight=1e8,
+                                       rho_bar=0.1, max_iter=50000, tol=1e-11)
+    assert float(info["prim_res"]) < 1e-6
+    assert float(jnp.max(jnp.abs(x_cp - xref))) < 1e-4
+    assert float(info["xi_max"]) < 1e-3                              # slack ~ off at huge gamma
