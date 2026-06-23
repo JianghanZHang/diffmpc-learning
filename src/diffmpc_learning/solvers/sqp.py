@@ -18,7 +18,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 
-from turbompc.solvers.admm.admm import ADMMState
+from turbompc.solvers.admm.admm import ADMMState, _inf_norm, _apply_P, _apply_Ct, _apply_Gt
 from turbompc.solvers.linesearch import backtracking_linesearch
 from turbompc.solvers.linear_systems_solvers.backends import SchurSolverBackend
 from turbompc.solvers.linear_systems_solvers.schur_solver import make_schur_solver
@@ -106,6 +106,9 @@ def sqp_central_path(
     kappa = float(kappa_anneal_start) if kappa_anneal else float(target_kappa)
 
     final_conv = jnp.asarray(jnp.inf, states.dtype)
+    final_stationarity = jnp.asarray(jnp.inf, states.dtype)
+    final_eq = jnp.asarray(jnp.inf, states.dtype)
+    final_ineq = jnp.asarray(jnp.inf, states.dtype)
     it_done = 0
     for it in range(max_sqp_iter):
         if kappa_anneal:
@@ -159,11 +162,23 @@ def sqp_central_path(
             z_g=jnp.zeros((N + 1, m), dtype=states.dtype),
             xi_g=slacks, rho_bar=jnp.asarray(rho_bar, states.dtype),
         )
-        conv, *_ = solver._compute_first_order_convergence_error(
+        conv, eq_err, ineq_err, *_ = solver._compute_first_order_convergence_error(
             qp_conv, states, controls, slacks, admm_state, problem_params,
+        )
+        # Compute stationarity separately (not returned by _compute_first_order_convergence_error).
+        states_qp, controls_qp = solver.program.scale_states_controls(states, controls, problem_params)
+        x_blocks_qp = pack_x(states_qp, controls_qp)
+        stat_err = _inf_norm(
+            _apply_P(qp_conv, x_blocks_qp)
+            + qp_conv.cost.q
+            + _apply_Ct(qp_conv, admm_state.y_f_0, admm_state.y_f_dyn)
+            + _apply_Gt(qp_conv, admm_state.y_g)
         )
         conv_history.append(float(conv))
         final_conv = conv
+        final_eq = eq_err
+        final_ineq = ineq_err
+        final_stationarity = stat_err
         it_done = it + 1
         if verbose:
             print(f"[sqp it {it:2d}] kappa={kappa:.1e} alpha={float(alpha):.3f} "
@@ -181,6 +196,9 @@ def sqp_central_path(
         "conv_history": jnp.asarray(conv_history),
         "num_iter": it_done,
         "final_conv": float(final_conv),
+        "final_stationarity": float(final_stationarity),
+        "final_eq": float(final_eq),
+        "final_ineq": float(final_ineq),
         "alphas": jnp.asarray(alphas),
         "kappas": jnp.asarray(kappas),
     }

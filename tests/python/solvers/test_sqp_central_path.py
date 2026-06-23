@@ -106,6 +106,10 @@ def test_nlp_kkt_converges_hard_box():
 
     assert out["final_conv"] < 1e-4, f"NLP-KKT did not reach 1e-4: {out['final_conv']:.3e}"
     assert float(ch[-1]) <= float(ch[0]) / 10.0, "conv did not decrease by >=10x"
+    print(f"HARD final_stationarity={out['final_stationarity']:.3e}  final_eq={out['final_eq']:.3e}  final_ineq={out['final_ineq']:.3e}")
+    assert out["final_stationarity"] < 1e-4, f"stationarity did not reach 1e-4: {out['final_stationarity']:.3e}"
+    assert out["final_eq"] < 1e-4, f"eq residual did not reach 1e-4: {out['final_eq']:.3e}"
+    assert out["final_ineq"] < 1e-4, f"ineq violation did not reach 1e-4: {out['final_ineq']:.3e}"
 
     rel_s = _rel_linf(out["states"], ref.states)
     rel_c = _rel_linf(out["controls"], ref.controls)
@@ -130,6 +134,10 @@ def test_nlp_kkt_converges_soft_box():
 
     assert out["final_conv"] < 1e-4, f"NLP-KKT did not reach 1e-4: {out['final_conv']:.3e}"
     assert float(ch[-1]) <= float(ch[0]) / 10.0, "conv did not decrease by >=10x"
+    print(f"SOFT final_stationarity={out['final_stationarity']:.3e}  final_eq={out['final_eq']:.3e}  final_ineq={out['final_ineq']:.3e}")
+    assert out["final_stationarity"] < 1e-4, f"stationarity did not reach 1e-4: {out['final_stationarity']:.3e}"
+    assert out["final_eq"] < 1e-4, f"eq residual did not reach 1e-4: {out['final_eq']:.3e}"
+    assert out["final_ineq"] < 1e-4, f"ineq violation did not reach 1e-4: {out['final_ineq']:.3e}"
 
     rel_s = _rel_linf(out["states"], states_ref)
     rel_c = _rel_linf(out["controls"], controls_ref)
