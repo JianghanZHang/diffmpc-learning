@@ -193,3 +193,114 @@ def solve_qp_central_path(
         "xi_max": _inf_norm(state.xi_g),
     }
     return state.x_blocks, duals, info
+
+
+def _kappa_schedule(kappa_0, kappa_final, beta):
+    """Geometric continuation schedule kappa_{j+1}=max(beta*kappa_j, kappa_final) (PrismQP eq 20).
+    Returns a static Python list of kappa levels ending at kappa_final."""
+    ks, k = [float(kappa_0)], float(kappa_0)
+    while k > kappa_final * (1.0 + 1e-12):
+        k = max(beta * k, kappa_final)
+        ks.append(k)
+    return ks
+
+
+def solve_qp_central_path_continuation(
+    qp_data: QPData,
+    schur_solver,
+    *,
+    slack_weight: float,
+    kappa_0: float = 1.0e-1,
+    kappa_final: float = 1.0e-6,
+    beta: float = 0.2,
+    iters_per_level: int = 25,
+    rho_bar: float = 0.1,
+    sigma: float = 1.0e-6,
+    rho_f_factor: float = 1000.0,
+    alpha: float = 1.6,
+    rho_min: float = 1.0e-6,
+    rho_max: float = 1.0e6,
+    adapt_rho_every: int = 10,
+    adaptive_rho_tolerance: float = 5.0,
+):
+    """Continuation-in-κ forward solve (PrismQP §5): geometrically anneal κ from `kappa_0` to
+    `kappa_final` (`κ_{j+1}=max(β·κ_j, κ_final)`), taking `iters_per_level` over-relaxed ADMM steps
+    at each level, warm-started into the next. Uses the SAME accelerated ADMM step as the fixed-κ
+    solver (over-relaxation α, OSQP adaptive ρ + Schur rebuild) at each κ level — fixed ρ alone does
+    not converge the inner QP in 25 steps/level. The κ-schedule is the conditioning device on top.
+
+    `qp_data` MUST be one-sided (`to_one_sided`). Forward solve only — for differentiable use,
+    PrismQP recommends the fixed-κ mode (`solve_qp_central_path`) and the κ_final backward.
+    Returns ``(x_blocks, duals, info)``; ``info`` adds ``kappas`` (the schedule) and ``levels``.
+    """
+    dtype = qp_data.cost.q.dtype
+    Np1, n = qp_data.cost.D.shape[0], qp_data.cost.D.shape[1]
+    N = Np1 - 1
+    nx = qp_data.eq.A_minus.shape[1]
+    n0 = qp_data.eq.A0.shape[0]
+    m = qp_data.ineq.G.shape[1]
+    rho_bar0 = jnp.asarray(rho_bar, dtype)
+    alpha = jnp.asarray(alpha, dtype)
+    eps_abs = eps_rel = jnp.asarray(kappa_final * 1e-3, dtype)   # keep adapting ρ until well below κ_final
+    h = qp_data.ineq.u
+    kappas = jnp.asarray(_kappa_schedule(kappa_0, kappa_final, beta), dtype)   # (L,) static length
+
+    schur0 = compute_S_Phiinv(qp_data, rho_bar0 * rho_f_factor, sigma, rho_ineq=rho_bar0)
+    state0 = ADMMState(
+        x_blocks=jnp.zeros((Np1, n), dtype), y_g=jnp.zeros((Np1, m), dtype),
+        y_f_0=jnp.zeros((n0,), dtype), y_f_dyn=jnp.zeros((N, nx), dtype),
+        z_g=jnp.zeros((Np1, m), dtype), xi_g=jnp.zeros((Np1, m), dtype), rho_bar=rho_bar0)
+
+    def admm_step(carry, kappa):                            # accelerated step at fixed κ level
+        it, state, schur = carry
+        rho_f = state.rho_bar * rho_f_factor
+        gammas = compute_gamma(qp_data, state.x_blocks, state.z_g, state.y_g,
+                               state.y_f_0, state.y_f_dyn, rho_f=rho_f, rho_ineq=state.rho_bar, sigma=sigma)
+        x_solved, _ = schur_solver.solve(schur, gammas, state.x_blocks)
+        Cx0, Cx = _apply_C_parts(qp_data, x_solved)
+        ineq_vals = _apply_G(qp_data, x_solved)
+        x_blocks = alpha * x_solved + (1.0 - alpha) * state.x_blocks
+        if m:
+            z_tilde = alpha * ineq_vals + (1.0 - alpha) * state.z_g + state.y_g / state.rho_bar
+            z_g, xi = elastic_retraction(z_tilde, h, kappa, state.rho_bar, slack_weight)
+            xi_g = -xi
+            y_g = state.y_g + state.rho_bar * (alpha * ineq_vals + (1.0 - alpha) * state.z_g - z_g)
+        else:
+            z_g, xi_g, y_g = state.z_g, state.xi_g, state.y_g
+        y_f_0 = state.y_f_0 + rho_f * alpha * (Cx0 - qp_data.eq.c0)
+        y_f_dyn = state.y_f_dyn + rho_f * alpha * (Cx - qp_data.eq.c)
+        ns = ADMMState(x_blocks=x_blocks, y_g=y_g, y_f_0=y_f_0, y_f_dyn=y_f_dyn,
+                       z_g=z_g, xi_g=xi_g, rho_bar=state.rho_bar)
+        residuals = _compute_residuals(qp_data, ns)
+
+        def _upd(_):
+            rho_c = _update_rho(state.rho_bar, residuals, rho_min, rho_max)
+            ratio = jnp.maximum(rho_c / state.rho_bar, state.rho_bar / rho_c)
+            converged = jnp.logical_not(_residuals_too_large(residuals, eps_abs, eps_rel))
+            keep = jnp.logical_or(jnp.logical_or(it < 2, converged), ratio < adaptive_rho_tolerance)
+            rho_new = jnp.where(keep, state.rho_bar, rho_c)
+            schur_new = jax.lax.cond(keep, lambda s: s,
+                lambda _: compute_S_Phiinv(qp_data, rho_new * rho_f_factor, sigma, rho_ineq=rho_new), schur)
+            return rho_new, schur_new
+        do_adapt = (it % adapt_rho_every) == 0
+        rho_new, schur = jax.lax.cond(do_adapt, _upd, lambda _: (state.rho_bar, schur), operand=None)
+        return (it + 1, ns._replace(rho_bar=rho_new), schur)
+
+    def level(carry, kappa):                                # iters_per_level steps at fixed κ level
+        carry = jax.lax.fori_loop(0, iters_per_level, lambda _i, c: admm_step(c, kappa), carry)
+        return carry, None
+
+    (it, state, schur), _ = jax.lax.scan(level, (jnp.asarray(0, jnp.int32), state0, schur0), kappas)
+
+    final_res = _compute_residuals(qp_data, state)
+    duals = (state.y_f_0, state.y_f_dyn, state.y_g)
+    info = {
+        "iters": int(len(_kappa_schedule(kappa_0, kappa_final, beta))) * iters_per_level,
+        "levels": len(_kappa_schedule(kappa_0, kappa_final, beta)),
+        "kappas": kappas,
+        "prim_res": final_res.primal_residual,
+        "dual_res": final_res.dual_residual,
+        "final_kappa": kappas[-1],
+        "xi_max": _inf_norm(state.xi_g),
+    }
+    return state.x_blocks, duals, info
