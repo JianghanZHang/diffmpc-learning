@@ -68,3 +68,41 @@ exact-Hessian adjoint vs convergence-checked FD). Two findings:
 **To get a meaningful acados gradient-vs-accuracy curve, acados must solve a SOFT box** (acados
 supports L2 slacks) so the gradient is well-defined; then the iter-cap (two-solver) sweep is
 informative. Data: `acados_qp_itersweep.npz` (gAD = acados adjoint per sample).
+
+# CORRECTION: acados's tau_min smoothing DOES fix the gradient (= B's log-barrier idea)
+
+The addendum above was **wrong**. Per Frey/Diehl 2025 "Differentiable NMPC" (Eq.10, Thm.3, Fig.1,
+Remark 2), acados smooths the gradient by keeping the **interior-point barrier at tau_min > 0**
+(complementarity `mu_i h_i = tau_min` instead of 0). Thm.3: the solution map is then **continuously
+differentiable**; Remark 2: the adjoint gives the **correct** sensitivity of the smoothed map even
+when strict complementarity fails. `tau_min=0` is the exact/nonsmooth case — which is the only one I
+had run. Set via `solver.options_set('tau_min', tau)` on the forward AND sensitivity solvers.
+
+Re-run sweeping tau_min (same hard-box linear QP, 16 x0, FD of the SAME tau_min-smoothed forward):
+
+| tau_min | FD-flagged | cos med | cos min | rel med |
+|---:|---:|---:|---:|---:|
+| 1e-2 | 0 | **1.0000** | 1.0000 | 2.4e-4 |
+| 1e-3 | 0 | **1.0000** | 1.0000 | 1.7e-3 |
+| 1e-4 | 0 | **1.0000** | 1.0000 | 4.3e-3 |
+| 1e-6 | 4 | 0.9987 | 0.964 | 0.12 |
+| 1e-9 | 5 | 0.655 | −0.17 | 0.99 |
+| 0 (exact) | 5 | 0.624 | −0.47 | 1.00 |
+
+**acados's tau_min smoothing fixes it**: cos=1.0 / 0-flagged for tau_min ≥ 1e-4, degrading to the
+ill-defined hard gradient as tau_min→0 — exactly Fig.1 of the paper, on our problem.
+
+## This is the same mechanism as B — a cross-validation
+
+acados's `tau_min` (a fixed IP barrier on the inequalities) and B's log-barrier `kappa` (a relaxed
+complementarity `s·y = kappa`) are the **same interior-point smoothing** of the active set. Both turn
+the ill-defined hard-box gradient into a smooth, FD-consistent one. So B is validated against the
+state-of-the-art acados/Diehl differentiable-MPC method.
+
+One real difference: at very small barrier (tau_min=1e-9) acados degrades to cos 0.65, but **B stayed
+cos=1.0 down to kappa=1e-11** (the kappa-sweep). Reason: B also carries the **elastic/Moreau slack**
+(gamma=1e4), which provides C1 smoothing independent of the barrier — so B's robustness comes mainly
+from the slack, with kappa secondary (consistent with the earlier kappa-sweep finding). acados here
+uses ONLY the barrier (no slack), so it needs tau_min >~ 1e-4 to smooth. Both are valid; B's
+slack+barrier is just more barrier-robust. Corrected experiment: `acados_qp_gradient.py`
+(tau_min sweep), data `acados_tau_sweep.npz`.

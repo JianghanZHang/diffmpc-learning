@@ -1,17 +1,18 @@
-"""acados QP-solver-level gradient accuracy vs the ACHIEVED QP solve accuracy (HPIPM, hard box).
+"""acados SMOOTHED gradient vs the barrier parameter tau_min — the acados analogue of B's log-barrier
+kappa sweep (Frey/Diehl 2025, "Differentiable NMPC", Eq.10 / Thm.3 / Fig.1).
 
-We showed HPIPM OVERSHOOTS the set qp_solver_tol (IPM, quadratic convergence), so the genuine
-accuracy knob is the QP ITERATION COUNT (`qp_solver_iter_max`). Sweep k=1..K; per x0:
-  - rel_sol_err = ||x_k - x*||_inf / ||x*||_inf   (x* = full-iter HPIPM solution)
-  - exact-Hessian adjoint gradient dL/d(Q,R) at the k-iter solution (eval_adjoint_solution_sensitivity)
-compared to a convergence-checked FD ground truth. Reports cos/rel vs rel_sol_err — the common axis
-on which A (ADMM-slack) and B (log-barrier) are also plotted (run separately in the GPU env).
+CORRECTION: acados DOES smooth the gradient — by keeping the interior-point barrier at tau_min>0
+(complementarity mu_i h_i = tau_min instead of 0), the solution map is continuously differentiable
+(Thm.3) and the adjoint gives the correct sensitivity of the SMOOTHED map even when strict
+complementarity fails (Remark 2). tau_min=0 is the exact/nonsmooth case (ill-defined at degenerate
+active sets). This is the SAME mechanism as B's log-barrier kappa.
 
-L = 0.5*sum(x^2+u^2) ⇒ adjoint seed = (x*, u*). Same linear MPC as acados_linear_problem.npz.
+Recipe (per acados smooth_policy_gradients.py): two solvers; options_set('tau_min', tau) on both;
+forward solve -> set_iterate -> setup_qp_matrices_and_factorize -> eval_adjoint_solution_sensitivity.
+Loss L = 0.5*sum(x^2+u^2) => adjoint seed = (x*, u*). Per tau_min, FD of the SAME tau_min-smoothed
+forward is the (reliable, smooth) ground truth. Same linear MPC as acados_linear_problem.npz.
 
-RUN IN THE turbompc-acados DOCKER (renderer bind-mounted):
-  docker run --rm -v $PWD:/work -w /work -v /path/t_renderer:/opt/acados/bin/t_renderer \
-    turbompc-acados python3 research/gradient-quality-diffnmpc/experiments/linear_system/acados_qp_gradient.py
+RUN IN turbompc-acados DOCKER (renderer bind-mounted).
 """
 import os
 import numpy as np
@@ -26,15 +27,14 @@ Qd0, Rd0, X0 = D["Q_diag"], D["R_diag"], D["x0"]
 NX, NU, N, UMAX = int(D["nx"]), int(D["nu"]), int(D["horizon"]), float(D["umax"])
 P0 = np.concatenate([Qd0, Rd0])
 
-KS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11]      # qp_solver_iter_max sweep (the IPM accuracy knob)
-K_TIGHT = 30                               # "exact" reference solve
+TAUS = [1e-2, 1e-3, 1e-4, 1e-6, 1e-9, 0.0]    # barrier smoothing; 0 = exact/nonsmooth
 FD_EPS = [1e-3, 3e-4, 1e-4, 3e-5]
 
 
-def build(itmax):
+def build(sens):
     ocp = AcadosOcp()
     x = ca.SX.sym("x", NX); u = ca.SX.sym("u", NU)
-    ocp.model.x = x; ocp.model.u = u; ocp.model.name = "lin_qp"
+    ocp.model.x = x; ocp.model.u = u; ocp.model.name = "lin_sm" + ("_s" if sens else "_f")
     Qp = ca.SX.sym("Qp", NX); Rp = ca.SX.sym("Rp", NU)
     ocp.model.p_global = ca.vertcat(Qp, Rp); ocp.p_global_values = P0.copy()
     ocp.model.disc_dyn_expr = ca.DM(A) @ x + ca.DM(B) @ u + ca.DM(bvec.reshape(-1, 1))
@@ -47,43 +47,38 @@ def build(itmax):
     ocp.solver_options.N_horizon = N; ocp.solver_options.tf = float(N)
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.nlp_solver_type = "SQP"
-    ocp.solver_options.hessian_approx = "EXACT"
-    ocp.solver_options.nlp_solver_max_iter = 1            # 1 SQP iter; the inner QP runs <= itmax HPIPM iters
-    ocp.solver_options.qp_solver_iter_max = itmax
-    ocp.solver_options.with_solution_sens_wrt_params = True
-    ocp.solver_options.qp_solver_cond_ric_alg = 0; ocp.solver_options.qp_solver_ric_alg = 0
-    for c in ("stat", "eq", "ineq", "comp"):
-        setattr(ocp.solver_options, f"qp_solver_tol_{c}", 1e-15)   # never stop early -> run exactly itmax
-        setattr(ocp.solver_options, f"nlp_solver_tol_{c}", 1e-12)
-    bd = os.path.join("/tmp", f"aqp_{itmax}"); ocp.solver_options.build_dir = bd
+    ocp.solver_options.hessian_approx = "EXACT"          # exact Hessian (Remark 3: required for sens)
+    ocp.solver_options.nlp_solver_max_iter = 50
+    ocp.solver_options.qp_solver_iter_max = 1000
+    if sens:
+        ocp.solver_options.with_solution_sens_wrt_params = True
+        ocp.solver_options.qp_solver_cond_ric_alg = 0; ocp.solver_options.qp_solver_ric_alg = 0
+    bd = os.path.join("/tmp", "asm_s" if sens else "asm_f"); ocp.solver_options.build_dir = bd
     return AcadosOcpSolver(ocp, json_file=os.path.join(bd, "ocp.json"), verbose=False)
 
 
-def solve(solver, x0, p):
-    solver.set_p_global_and_precompute_dependencies(p)
-    solver.set(0, "lbx", x0); solver.set(0, "ubx", x0)
-    solver.solve()
-    xs = np.array([solver.get(k, "x") for k in range(N + 1)])
-    us = np.array([solver.get(k, "u") for k in range(N)])
+def traj(s, x0, p):
+    s.set_p_global_and_precompute_dependencies(p)
+    s.set(0, "lbx", x0); s.set(0, "ubx", x0); s.solve()
+    xs = np.array([s.get(k, "x") for k in range(N + 1)]); us = np.array([s.get(k, "u") for k in range(N)])
     return xs, us
 
 
-def flat(xs, us):
-    return np.concatenate([np.concatenate([xs[k], us[k]]) for k in range(N)] + [xs[N]])
+def loss(xs, us): return 0.5 * float(np.sum(xs ** 2) + np.sum(us ** 2))
 
 
-def adjoint(solver, x0, p):
-    xs, us = solve(solver, x0, p)
-    solver.setup_qp_matrices_and_factorize()
+def adjoint(fwd, sens, x0, p):
+    xs, us = traj(fwd, x0, p)
+    sens.set_p_global_and_precompute_dependencies(p)
+    sens.set_iterate(fwd.get_flat_iterate()); sens.setup_qp_matrices_and_factorize()
     seed_x = [(k, xs[k].reshape(NX, 1)) for k in range(N + 1)]
     seed_u = [(k, us[k].reshape(NU, 1)) for k in range(N)]
-    g = np.asarray(solver.eval_adjoint_solution_sensitivity(seed_x=seed_x, seed_u=seed_u)).ravel()
-    return g, xs, us
+    g = np.asarray(sens.eval_adjoint_solution_sensitivity(seed_x=seed_x, seed_u=seed_u)).ravel()
+    return g
 
 
-def fd_gt(tight, x0):
-    def L(p):
-        xs, us = solve(tight, x0, p); return 0.5 * float(np.sum(xs ** 2) + np.sum(us ** 2))
+def fd_gt(fwd, x0):
+    def L(p): xs, us = traj(fwd, x0, p); return loss(xs, us)
     per = []
     for eps in FD_EPS:
         g = np.zeros(len(P0))
@@ -106,36 +101,32 @@ def _rel(a, b): return float(np.linalg.norm(a - b) / (np.linalg.norm(b) + 1e-30)
 
 def main():
     n = X0.shape[0]
-    print(f"acados QP-level: nx={NX} nu={NU} H={N} umax={UMAX} n_x0={n} | HPIPM, sweep qp_solver_iter_max")
-    tight = build(K_TIGHT)
-    xstar = [flat(*solve(tight, X0[j], P0)) for j in range(n)]
-    gFD = np.zeros((n, len(P0))); flagged = np.zeros(n, bool)
-    for j in range(n):
-        gFD[j], okj = fd_gt(tight, X0[j]); flagged[j] = not okj
-    keep = ~flagged
-    print(f"FD ground truth: flagged {int(flagged.sum())}/{n}; comparing on {int(keep.sum())} samples")
-
-    print(f"\n{'k':>3} {'rel_sol_err':>12} {'cos med':>9} {'cos min':>9} {'rel med':>9}")
-    rows = []; gAD = np.full((n, len(P0)), np.nan)
-    for k in KS:
-        s = build(k)
-        sol_err, cosv, relv = [], [], []
+    print(f"acados SMOOTHED gradient vs tau_min: nx={NX} nu={NU} H={N} umax={UMAX} n_x0={n}")
+    fwd, sens = build(False), build(True)
+    print(f"\n{'tau_min':>9} {'FD-flag':>8} {'cos med':>9} {'cos min':>9} {'rel med':>9}")
+    rows = []
+    for tau in TAUS:
+        for s in (fwd, sens):
+            s.options_set("tau_min", tau)
+        gFD = np.zeros((n, len(P0))); flagged = np.zeros(n, bool)
+        for j in range(n):
+            gFD[j], okj = fd_gt(fwd, X0[j]); flagged[j] = not okj
+        cosv, relv = [], []
         for j in range(n):
             if flagged[j]:
                 continue
-            g, xs, us = adjoint(s, X0[j], P0)
-            if k == KS[-1]:
-                gAD[j] = g                                 # converged acados adjoint per sample
-            xk = flat(xs, us)
-            sol_err.append(np.max(np.abs(xk - xstar[j])) / (np.max(np.abs(xstar[j])) + 1e-30))
+            g = adjoint(fwd, sens, X0[j], P0)
             cosv.append(_cos(g, gFD[j])); relv.append(_rel(g, gFD[j]))
-        sol_err, cosv, relv = map(np.array, (sol_err, cosv, relv))
-        rows.append((k, np.median(sol_err), np.median(cosv), np.min(cosv), np.median(relv)))
-        print(f"{k:>3} {np.median(sol_err):12.2e} {np.median(cosv):9.4f} {np.min(cosv):9.4f} {np.median(relv):9.2e}")
-    np.savez(os.path.join(RES, "acados_qp_itersweep.npz"),
-             ks=np.array([r[0] for r in rows]), rows=np.array([r[1:] for r in rows]),
-             gFD=gFD, gAD=gAD, flagged=flagged, n=n, x0=X0, Q_diag=Qd0, R_diag=Rd0)
-    print("\nsaved results/acados_qp_itersweep.npz")
+        cosv, relv = map(np.array, (cosv, relv))
+        cm = np.median(cosv) if cosv.size else float("nan")
+        rows.append((tau, int(flagged.sum()), cm, np.min(cosv) if cosv.size else float("nan"),
+                     np.median(relv) if relv.size else float("nan")))
+        print(f"{tau:9.0e} {int(flagged.sum()):8d} {cm:9.4f} "
+              f"{(np.min(cosv) if cosv.size else float('nan')):9.4f} "
+              f"{(np.median(relv) if relv.size else float('nan')):9.2e}")
+    np.savez(os.path.join(RES, "acados_tau_sweep.npz"), taus=np.array([r[0] for r in rows]),
+             rows=np.array([r[1:] for r in rows]), n=n)
+    print("\nsaved results/acados_tau_sweep.npz")
 
 
 if __name__ == "__main__":
