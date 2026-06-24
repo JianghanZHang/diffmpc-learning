@@ -27,6 +27,7 @@ import turbompc.solvers.linear_systems_solvers.cudss_ffi_backend  # noqa: E402,F
 
 from turbompc.solvers.admm.admm import (  # noqa: E402
     compute_S_Phiinv, compute_gamma, _apply_C_parts, _apply_G,
+    ADMMState, ADMMResiduals, _compute_residuals, _residuals_too_large, _update_rho,
 )
 from turbompc.solvers.qp_data import QPData, QPInequalityBlocks  # noqa: E402
 
@@ -60,20 +61,30 @@ def solve_qp_central_path(
     rho_bar: float = 0.1,
     sigma: float = 1.0e-6,
     rho_f_factor: float = 1000.0,
+    alpha: float = 1.6,
+    rho_min: float = 1.0e-6,
+    rho_max: float = 1.0e6,
+    adapt_rho_every: int = 25,
+    check_termination_every: int = 25,
+    adaptive_rho_tolerance: float = 5.0,
     max_iter: int = 20000,
     tol: float = 1.0e-9,
 ):
-    """ADMM forward solve with the closed-form elastic retraction z-update (fixed kappa).
+    """Accelerated ADMM forward solve with the closed-form elastic retraction z-update.
 
-    qp_data MUST be one-sided (Gx <= u; use to_one_sided). Identical to TurboMPC's
-    ADMM except the inequality z_g-update is `elastic_retraction` instead of a box
-    projection. Over-relaxation alpha=1, no adaptive rho. Linear system: cuDSS Schur.
+    A faithful port of TurboMPC's `_solve_jax_loop` (over-relaxation alpha=1.6, OSQP-style
+    adaptive rho with Schur rebuild, residual-based termination) whose ONLY difference is the
+    inequality z-update: a closed-form elastic log-barrier retraction (fixed `target_kappa`)
+    instead of TurboMPC's box projection. `qp_data` MUST be one-sided (`to_one_sided`).
+    Linear system: cuDSS Schur.
 
-    Returns ``(x_blocks, duals, info)`` where ``duals = (y_f_0, y_f_dyn, y_g)`` are the
-    converged ADMM duals: ``y_f_0`` the initial-equality dual ``(n0,)``, ``y_f_dyn`` the
-    dynamics-equality dual ``(N, nx)``, and ``y_g`` the one-sided inequality dual with the
-    stacked shape ``(N+1, 2m)`` (upper rows then lower rows from to_one_sided). ``info``
-    keys are unchanged (``iters``, ``delta``, ``prim_res``, ``xi_max``).
+    `tol` is the **residual** tolerance, used as `eps_abs = eps_rel = tol` in TurboMPC's
+    convergence test `r > eps_abs + eps_rel*norm_term` (primal `max(‖Cx−c‖,‖Gx−z‖)`, dual
+    `‖Px+q+Cᵀy+Gᵀy_g‖`). This replaces the old step-norm `delta` check (which let infeasible
+    iterates through). Adaptive rho follows the JAX path: blocked after convergence.
+
+    Returns ``(x_blocks, duals, info)`` with ``duals = (y_f_0, y_f_dyn, y_g)`` and ``info``
+    keys ``iters, prim_res, dual_res, final_rho, xi_max``.
     """
     dtype = qp_data.cost.q.dtype
     Np1, n = qp_data.cost.D.shape[0], qp_data.cost.D.shape[1]
@@ -81,51 +92,104 @@ def solve_qp_central_path(
     nx = qp_data.eq.A_minus.shape[1]
     n0 = qp_data.eq.A0.shape[0]
     m = qp_data.ineq.G.shape[1]
-    rho_bar = jnp.asarray(rho_bar, dtype)
-    rho_f = rho_bar * rho_f_factor
+    rho_bar0 = jnp.asarray(rho_bar, dtype)
+    alpha = jnp.asarray(alpha, dtype)
+    eps_abs = eps_rel = jnp.asarray(tol, dtype)
     h = qp_data.ineq.u  # one-sided upper bounds (N+1, m)
 
-    schur = compute_S_Phiinv(qp_data, rho_f, sigma, rho_ineq=rho_bar)
+    schur0 = compute_S_Phiinv(qp_data, rho_bar0 * rho_f_factor, sigma, rho_ineq=rho_bar0)
 
-    x0 = jnp.zeros((Np1, n), dtype)
-    y_g0 = jnp.zeros((Np1, m), dtype)
-    y_f_00 = jnp.zeros((n0,), dtype)
-    y_f_dyn0 = jnp.zeros((N, nx), dtype)
-    if m:
-        z_g0, _ = elastic_retraction(_apply_G(qp_data, x0), h, target_kappa, rho_bar, slack_weight)
-    else:
-        z_g0 = jnp.zeros((Np1, 0), dtype)
+    state0 = ADMMState(
+        x_blocks=jnp.zeros((Np1, n), dtype),
+        y_g=jnp.zeros((Np1, m), dtype),
+        y_f_0=jnp.zeros((n0,), dtype),
+        y_f_dyn=jnp.zeros((N, nx), dtype),
+        z_g=jnp.zeros((Np1, m), dtype),
+        xi_g=jnp.zeros((Np1, m), dtype),
+        rho_bar=rho_bar0,
+    )
     inf = jnp.asarray(jnp.inf, dtype)
-    zero = jnp.asarray(0.0, dtype)
-    init = (jnp.asarray(0, jnp.int32), x0, y_g0, y_f_00, y_f_dyn0, z_g0, inf, zero)
+    one = jnp.asarray(1.0, dtype)
+    res0 = ADMMResiduals(inf, inf, inf, inf, one, one)
+    carry0 = (jnp.asarray(0, jnp.int32), state0, schur0, res0)
 
-    def cond(s):
-        it, _, _, _, _, _, delta, _ = s
-        return jnp.logical_and(it < max_iter, delta > tol)
+    def cond(carry):
+        it, _, _, residuals = carry
+        should_check = (it % check_termination_every) == 0
+        too_large = _residuals_too_large(residuals, eps_abs, eps_rel)
+        keep_going = jnp.logical_or(jnp.logical_not(should_check), too_large)
+        cont = jnp.logical_and(it < max_iter, keep_going)
+        return jnp.logical_or(cont, it < 1)
 
-    def body(s):
-        it, x, y_g, y_f_0, y_f_dyn, z_g, _, _ = s
-        gammas = compute_gamma(qp_data, x, z_g, y_g, y_f_0, y_f_dyn,
-                               rho_f=rho_f, rho_ineq=rho_bar, sigma=sigma)
-        x_new, _ = schur_solver.solve(schur, gammas, x)
-        Cx0, Cx = _apply_C_parts(qp_data, x_new)
-        ineq_vals = _apply_G(qp_data, x_new)
+    def body(carry):
+        it, state, schur, residuals_prev = carry
+        rho_f = state.rho_bar * rho_f_factor
+
+        # x-update (cuDSS Schur), residual quantities from the SOLVED x (pre over-relax)
+        gammas = compute_gamma(qp_data, state.x_blocks, state.z_g, state.y_g,
+                               state.y_f_0, state.y_f_dyn,
+                               rho_f=rho_f, rho_ineq=state.rho_bar, sigma=sigma)
+        x_solved, _ = schur_solver.solve(schur, gammas, state.x_blocks)
+        Cx0, Cx = _apply_C_parts(qp_data, x_solved)
+        ineq_vals = _apply_G(qp_data, x_solved)
+
+        # over-relaxation of the carried primal
+        x_blocks = alpha * x_solved + (1.0 - alpha) * state.x_blocks
+
+        # z-update: the ONE difference vs TurboMPC -> elastic log-barrier retraction
         if m:
-            z_tilde = ineq_vals + y_g / rho_bar
-            z_g_new, xi_g = elastic_retraction(z_tilde, h, target_kappa, rho_bar, slack_weight)
-            y_g_new = y_g + rho_bar * (ineq_vals - z_g_new)
-            xi_max = _inf_norm(xi_g)
+            z_tilde = alpha * ineq_vals + (1.0 - alpha) * state.z_g + state.y_g / state.rho_bar
+            z_g, xi = elastic_retraction(z_tilde, h, target_kappa, state.rho_bar, slack_weight)
+            xi_g = -xi   # sign: y_g=gamma*xi at the fixed point, but the dual residual uses gamma*xi_g + y_g
         else:
-            z_g_new, y_g_new, xi_max = z_g, y_g, zero
-        y_f_0_new = y_f_0 + rho_f * (Cx0 - qp_data.eq.c0)
-        y_f_dyn_new = y_f_dyn + rho_f * (Cx - qp_data.eq.c)
-        delta = jnp.maximum(_inf_norm(x_new - x), _inf_norm(z_g_new - z_g))
-        return (it + 1, x_new, y_g_new, y_f_0_new, y_f_dyn_new, z_g_new, delta, xi_max)
+            z_g, xi_g = state.z_g, state.xi_g
 
-    it, x, y_g, y_f_0, y_f_dyn, z_g, delta, xi_max = jax.lax.while_loop(cond, body, init)
-    Cx0, Cx = _apply_C_parts(qp_data, x)
-    prim = jnp.maximum(_inf_norm(Cx0 - qp_data.eq.c0), _inf_norm(Cx - qp_data.eq.c))
-    if m:
-        prim = jnp.maximum(prim, _inf_norm(_apply_G(qp_data, x) - z_g))
-    duals = (y_f_0, y_f_dyn, y_g)  # converged equality (init + dynamics) and one-sided ineq duals
-    return x, duals, {"iters": it, "delta": delta, "prim_res": prim, "xi_max": xi_max}
+        # dual update (over-relaxed)
+        y_f_0 = state.y_f_0 + rho_f * alpha * (Cx0 - qp_data.eq.c0)
+        y_f_dyn = state.y_f_dyn + rho_f * alpha * (Cx - qp_data.eq.c)
+        if m:
+            y_g = state.y_g + state.rho_bar * (alpha * ineq_vals + (1.0 - alpha) * state.z_g - z_g)
+        else:
+            y_g = state.y_g
+
+        new_state = ADMMState(x_blocks=x_blocks, y_g=y_g, y_f_0=y_f_0, y_f_dyn=y_f_dyn,
+                              z_g=z_g, xi_g=xi_g, rho_bar=state.rho_bar)
+
+        # residuals + adaptive rho + Schur rebuild (every check_termination_every)
+        should_check = (it % check_termination_every) == 0
+        residuals = jax.lax.cond(
+            should_check, lambda _: _compute_residuals(qp_data, new_state),
+            lambda _: residuals_prev, operand=None)
+
+        def _update_rho_and_schur(_):
+            rho_cand = _update_rho(state.rho_bar, residuals, rho_min, rho_max)
+            ratio = jnp.maximum(rho_cand / state.rho_bar, state.rho_bar / rho_cand)
+            converged = jnp.logical_not(_residuals_too_large(residuals, eps_abs, eps_rel))
+            keep = jnp.logical_or(it < 2, it % adapt_rho_every != 0)
+            keep = jnp.logical_or(keep, converged)
+            keep = jnp.logical_or(keep, ratio < adaptive_rho_tolerance)
+            rho_new = jnp.where(keep, state.rho_bar, rho_cand)
+            schur_new = jax.lax.cond(
+                keep, lambda s: s,
+                lambda _: compute_S_Phiinv(qp_data, rho_new * rho_f_factor, sigma, rho_ineq=rho_new),
+                schur)
+            return rho_new, schur_new
+
+        rho_new, schur = jax.lax.cond(
+            should_check, _update_rho_and_schur, lambda _: (state.rho_bar, schur), operand=None)
+
+        next_state = new_state._replace(rho_bar=rho_new)
+        return (it + 1, next_state, schur, residuals)
+
+    it, state, schur, _ = jax.lax.while_loop(cond, body, carry0)
+
+    final_res = _compute_residuals(qp_data, state)
+    duals = (state.y_f_0, state.y_f_dyn, state.y_g)
+    info = {
+        "iters": it,
+        "prim_res": final_res.primal_residual,
+        "dual_res": final_res.dual_residual,
+        "final_rho": state.rho_bar,
+        "xi_max": _inf_norm(state.xi_g),
+    }
+    return state.x_blocks, duals, info
