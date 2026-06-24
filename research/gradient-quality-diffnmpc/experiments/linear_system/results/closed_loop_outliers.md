@@ -58,3 +58,20 @@ Caveats (per CLAUDE.md): A and B solve slightly different problems (hard box vs 
 | **all** | 56 | 0.473 | 41 | 16 | **42/56** | 1.00000 | 0 | **2/56** |
 
 **Across 3 random systems / 56 samples: A is an outlier on 42/56 (75%), B on 2/56 (4%).** Every B outlier is an FD-plateau edge case with cos=1.0; B has zero cos<0.99 on all three systems. The hard-box backward's closed-loop outliers (and their elimination by the log-barrier smoothing) are robust to the random system, not a seed-0 artifact.
+
+## Faithful horizon H=40 (the diffmpc benchmark horizon; seed 0, n=12)
+
+The main results above use H=20 (reduced for compile tractability). Re-run at the benchmark's
+**H=40** confirms and strengthens the pattern:
+
+| method | FD-flagged | cos (non-flagged) | rel_l2 |
+|---|---:|---:|---:|
+| A (hard box) | **11/12** | 1.00000 (the 1 plateau-able sample) | 1.9e-3 |
+| B (log-barrier) | **0/12** | 1.00000 (all 12) | 2.2e-6 |
+
+At the longer horizon the 50-step rollout crosses **even more** control active-set boundaries, so A's
+hard-box cost-vs-weights map is **non-differentiable on 11/12 samples** — the convergence-checked FD
+cannot even plateau (the gradient ground truth is undefined there, not merely mismatched). B's smooth
+rollout plateaus cleanly on all 12 with AD=FD (cos=1.0, rel_l2~2e-6). The faithful horizon makes the
+hard-box policy *more* pathological and leaves the log-barrier policy untouched — the smoothing is what
+makes the closed-loop diffmpc-as-policy gradient exist at all.
