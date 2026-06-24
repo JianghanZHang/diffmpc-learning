@@ -28,7 +28,8 @@ FD_EPS = [1e-3, 3e-4, 1e-4, 3e-5]
 def build(sens, itmax=1000):
     ocp = AcadosOcp()
     x = ca.SX.sym("x", NX); u = ca.SX.sym("u", NU)
-    ocp.model.x = x; ocp.model.u = u; ocp.model.name = "lic_" + ("s" if sens else "f")
+    ocp.model.x = x; ocp.model.u = u
+    ocp.model.name = "lic_s" if sens else f"lic_f_{itmax}"   # UNIQUE name per cap (else stale-solver reuse)
     Qp = ca.SX.sym("Qp", NX); Rp = ca.SX.sym("Rp", NU)
     ocp.model.p_global = ca.vertcat(Qp, Rp); ocp.p_global_values = P0.copy()
     ocp.model.disc_dyn_expr = ca.DM(A) @ x + ca.DM(B) @ u + ca.DM(bvec.reshape(-1, 1))

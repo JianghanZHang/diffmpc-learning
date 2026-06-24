@@ -134,3 +134,35 @@ QP tightly in ~10 iters and the diff machinery forces a full solve. The fair cro
 is therefore: ADMM trades gradient accuracy against solve cost (eps); acados fixes the solve (tight)
 and trades gradient *smoothness/bias* against the active-set fidelity (tau_min) — the two are
 controlling different things.
+
+# CORRECTION: qp_solver_iter_max was NOT bypassed — it was a stale-solver build bug
+
+The previous addendum ("qp_solver_iter_max bypassed → acados has no solve-accuracy-vs-gradient
+tradeoff") is **WRONG**. The bypass was a bug in the sweep loop: reusing the same `model.name` across
+the per-k rebuilds made acados load a **cached/compiled solver** (carrying the reference build's
+`qp_solver_iter_max=1000`) instead of rebuilding with the per-k cap. Proof: with distinct `model.name`,
+cap=2 gives qp_iter=2 and a loose solution (8.36) — in every config (no tau_min / build-time / runtime).
+
+Re-run with a unique model name per cap (two-solver pattern, tau_min=1e-4 so the converged gradient is
+well-defined; FD of the converged tau_min forward as GT):
+
+| qp_iter_max | rel_sol_err | cos med | cos min | rel med |
+|---:|---:|---:|---:|---:|
+| 1 | 6.8e-1 | 0.19 | −0.49 | 8.0e3 |
+| 3 | 5.5e-1 | 0.35 | −0.28 | 6.5e3 |
+| 4 | 2.0e-1 | 0.66 | −0.32 | 5.5e3 |
+| 6 | 9.2e-3 | 0.88 | −0.32 | 7.6e2 |
+| 8 | 1.9e-6 | 0.998 | −0.36 | 1.4e-1 |
+| 10 | 4.7e-11 | 1.0000 | −0.15 | 4.6e-3 |
+| 1000 | 0 | 1.0000 | 1.0000 | 4.3e-3 |
+
+**acados DOES have the graceful tradeoff.** As the QP is solved more accurately (more IPM iters →
+smaller rel_sol_err), the gradient improves monotonically (median cos 0.19 → 1.0, reaching cos=1.0 at
+~10 iters = full convergence at tau_min=1e-4). The knob is **`qp_solver_iter_max`** (the IPM iteration
+count), NOT `qp_solver_tol` (which overshoots). So the "same check as our ADMM" DOES transfer to
+acados — just on the iteration-count axis rather than the residual-tolerance axis.
+
+Corrected cross-solver statement: BOTH solvers trade gradient accuracy against solve cost — ADMM via
+`eps` (residual, ~eps iterations, first-order), acados via `qp_solver_iter_max` (~10 IPM iterations,
+second-order). The `tau_min` smoothing is a SEPARATE axis (gradient well-definedness), orthogonal to
+the solve-accuracy axis. Script: `acados_qp_itercap.py`.
