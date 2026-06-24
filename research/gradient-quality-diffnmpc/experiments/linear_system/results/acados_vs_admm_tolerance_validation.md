@@ -166,3 +166,26 @@ Corrected cross-solver statement: BOTH solvers trade gradient accuracy against s
 `eps` (residual, ~eps iterations, first-order), acados via `qp_solver_iter_max` (~10 IPM iterations,
 second-order). The `tau_min` smoothing is a SEPARATE axis (gradient well-definedness), orthogonal to
 the solve-accuracy axis. Script: `acados_qp_itercap.py`.
+
+# B without the slack = acados (pure barrier): confirms the slack is the robustness source
+
+Turned off B's elastic/Moreau slack (gamma -> 1e12) leaving the pure log-barrier on the hard box,
+and swept kappa (single linear QP, 8 x0, gradient vs convergence-checked FD):
+
+| kappa | B WITH slack (g=1e4) | B NO-slack (g=1e12) |
+|---:|---:|---:|
+| 1e-2 | 1.0000 | 1.0000 |
+| 1e-3 | 1.0000 | 1.0000 |
+| 1e-4 | 1.0000 | 1.0000 |
+| 1e-6 | 1.0000 | 0.997 (4 flagged) |
+| 1e-9 | 1.0000 | -0.029 (5 flagged) |
+
+**B-no-slack degrades exactly like acados** (cos=1.0 for kappa>=1e-4, -> 0 as kappa->0; same 1e-4
+threshold acados needs for tau_min). B-with-slack stays cos=1.0 across all kappa. So:
+- B's barrier kappa == acados's tau_min (pure interior-point smoothing; both need >=~1e-4).
+- B's robustness to a tiny kappa comes ENTIRELY from the **elastic/Moreau slack (gamma)**, which gives
+  C1 smoothing independent of the barrier. Confirms the earlier kappa-sweep finding directly.
+
+So **B = acados's interior-point barrier smoothing PLUS a Moreau slack** — the slack is the extra
+ingredient that makes B robust to the barrier parameter (acados, barrier-only, is not). Script:
+`b_slack_vs_barrier.py`.
