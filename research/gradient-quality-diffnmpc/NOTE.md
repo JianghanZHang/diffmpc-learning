@@ -524,10 +524,10 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   fixes the across-active-set gradient pathology *in closed loop*) and sharpens it: the fix is the soft-box
   *forward*. Artifacts: `experiments/linear_system/{closed_loop_accuracy.py,cl_b.py,cl_b_kappa_sweep.py,
   results/closed_loop_outliers.md}`, `experiments/cartpole/{closed_loop_cartpole.py,results/closed_loop_cartpole.md}`.
-  Open: the nu≥4 *nonlinear* **drone is blocked via this approach** — the 13-state quaternion-RK4 QP grad does
-  not compile in usable time (even sqp=1 / n=2 hangs >7 min; the exact Lagrangian Hessian = 2nd derivs of the
-  RK4 quaternion dynamics is the bottleneck, not SQP/rollout/vmap; see
-  `experiments/quadrotor/results/closed_loop_quadrotor_NOTE.md`). A drone closed-loop study needs a different
-  gradient path (manual per-step adjoint chaining / a hand-written rollout VJP that reuses the solver's own
-  custom_vjp without nesting it in one big traced graph). Also open: B on nonlinear (multi-SQP custom_vjp);
-  whether these closed-loop outliers actually degrade RL training (RQ3).
+  Open: the nu≥4 *nonlinear* **drone closed-loop IS tractable** (an earlier "intractable" claim here was a
+  GPU-contention artifact — clean runs: quadrotor sqp=10 n=2 ≈120 s, n=8 AD 82 s; the FD is just slow ~38 min
+  at 17 weights × 4 eps × 50-step rollout; see `experiments/quadrotor/results/closed_loop_quadrotor_NOTE.md`).
+  First result (umax=1.2, *mild* box): A-hardbox 8/8 FD-flagged but cos 0.976–1.0 (high) — the mild-box regime
+  (controls rarely saturate), like the cartpole umax=2 case; the decisive **tight-box** quadrotor run + the
+  A-slack control are pending. Also open: B on nonlinear (multi-SQP custom_vjp); whether these closed-loop
+  outliers actually degrade RL training (RQ3).

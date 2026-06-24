@@ -1,30 +1,33 @@
-# Quadrotor closed-loop: a tractability boundary (not a result)
+# Quadrotor closed-loop — status & correction
 
-**Run 2026-06-24.** Attempted to extend the closed-loop hard-box-vs-slack gradient study to the
-**nu=4 nonlinear quadrotor** (13 states, RK4, hover regulation, control box) via the same
-differentiable-rollout approach (`closed_loop_quadrotor.py`, jax.grad through a 50-step rollout).
+**CORRECTION (2026-06-24).** An earlier version of this note claimed the quadrotor closed-loop
+differentiable rollout was *intractable*. **That was wrong — a GPU-contention artifact.** The
+"timeouts" happened because a previously killed run left processes/GPU memory occupied, slowing the
+subsequent runs. **Clean runs are tractable**: with the GPU idle, the n=2 probe compiles+runs in
+~70s (sqp=1) to ~120s (sqp=10); the full n=8 study runs (AD ~82s; the FD is the slow part, ~2300s,
+because it is 17 cost-weights × 4 eps × a 50-step sqp=10 rollout — slow, not intractable). Lesson:
+always isolate GPU contention before declaring a compute boundary.
 
-**It is intractable with this approach.** Every configuration tried failed to finish *compiling*:
-- n=2, H=10, sim=20, sqp=5  → timed out (> 8m40s)
-- n=2, H=12, sim=50, sqp=3  → died during compile
-- n=2, H=12, sim=50, **sqp=1** → timed out (> 7m)
+## Setup
 
-Since even **sqp=1** (one QP per step) and **n=2** hang, the bottleneck is **not** the SQP-iteration
-unroll, the rollout length (build_rollout_fn uses lax.scan, so sim_steps does not unroll), or the
-vmap width. It is the **per-step compile of the 13-state quadrotor QP grad**: the RK4 discretization
-of the nonlinear quaternion dynamics, differentiated twice (the backward uses the exact Lagrangian
-Hessian D + λᵀ∇²f), produces a jaxpr whose XLA compile does not complete in a usable time. The
-linear (8-state) and cartpole (4-state RK4) bodies compile in ~10–30s; the quadrotor does not.
+nu=4 nonlinear quadrotor (13 states, RK4, hover regulation), 50-step closed-loop, MPC horizon=12,
+sqp=10 (converged: closed-loop cost drops 224→~20 vs sqp=1), per-sample (n=8, seed 0). A-hardbox
+(use_slack=False) vs A-slack (use_slack=True, γ=1e4), each AD vs convergence-checked FD of its own
+rollout. Driver: `closed_loop_quadrotor.py` (`--slack`, `--umax`, `--sqp_iter`).
 
-**Implication.** The closed-loop diffmpc-as-policy gradient via `jax.grad` through the unrolled
-(scanned) rollout scales to small systems but **not** to a 13-state nonlinear system. A drone
-closed-loop study needs a different gradient path — e.g. manual per-step adjoint chaining (avoid
-re-tracing the full solve under grad), a hand-written rollout VJP that reuses the solver's own
-custom_vjp per step without nesting it in a big traced graph, an analytic-Hessian backend that
-compiles, or simply a much larger compile budget. That is a focused engineering effort, not an
-autonomous-loop continuation.
+## Result so far (umax=1.2 — mild box)
 
-The tractable closed-loop findings stand on the linear (nu=4) and cartpole (nu=1 nonlinear)
-systems — see `../linear_system/results/closed_loop_outliers.md` and
-`../cartpole/results/closed_loop_cartpole.md`. The driver `closed_loop_quadrotor.py` is kept for
-whoever picks up the drone case with a tractable gradient path.
+- **A-hardbox**: 8/8 FD-flagged, but **cos 0.976–1.0** (high), rel_l2 ≤ 0.22 — *not* the wild
+  negative-cosine pathology seen on the linear/cartpole tight-box cases.
+
+This looks like the **mild-box regime** (umax=1.2 ≈ 1.2× hover thrust, so the controls rarely
+saturate hard → few active-set crossings — analogous to the cartpole umax=2 case, which was also
+clean). The 8/8 flags may also be partly sqp=10 under-convergence noise (the FD plateau is marginal).
+A **tight-box** run (smaller umax, forcing saturation) is the decisive test — pending; the A-slack
+control at umax=1.2 is also pending (run in progress).
+
+## Open
+
+Tight-box quadrotor (umax small enough to saturate) to see if the hard-box pathology + slack fix
+appear with nu=4 nonlinear (as they did on the cartpole tight box). The FD is slow (~38 min/run at
+17 weights × 4 eps), so reduce eps count / n for the tight-box sweep.
