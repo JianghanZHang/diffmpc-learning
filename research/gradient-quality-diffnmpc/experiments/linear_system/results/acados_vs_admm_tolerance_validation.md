@@ -106,3 +106,31 @@ from the slack, with kappa secondary (consistent with the earlier kappa-sweep fi
 uses ONLY the barrier (no slack), so it needs tau_min >~ 1e-4 to smooth. Both are valid; B's
 slack+barrier is just more barrier-robust. Corrected experiment: `acados_qp_gradient.py`
 (tau_min sweep), data `acados_tau_sweep.npz`.
+
+# Addendum: qp_solver_iter_max — works in a clean solve, bypassed in the differentiable config
+
+Tried `qp_solver_iter_max` as the real accuracy knob (vs `qp_solver_tol`, which overshoots).
+
+- **Clean solve (no tau_min / no options_set):** the cap works and IS the fine-grained knob — the
+  iter-probe gave `||x-x*||` = 9.46, 8.36, 6.77, 5.13, 3.20, 1.32, 0.11, 8e-3, 3.5e-4, 4.5e-8 for
+  k=1..10. So qp_iter_max controls solve accuracy smoothly, unlike qp_solver_tol.
+- **Differentiable config (tau_min set via `options_set`, two-solver sensitivity):** the build-time
+  cap is **bypassed** — `get_stats('qp_iter')` returns the max and `||x-x_ref||=0` for every
+  `qp_solver_iter_max` from 1 to 1000, at both tau_min=1e-4 and tau_min=0. acados solves the QP fully
+  regardless. (`qp_solver_iter_max` is also build-time only; not in the runtime `options_set` list.)
+
+## Consolidated conclusion: acados has no graceful solve-accuracy-vs-gradient tradeoff
+
+The two solvers control gradient quality through fundamentally different knobs:
+
+| | accuracy knob for the gradient | loosen it -> gradient |
+|---|---|---|
+| **our ADMM (1st-order)** | `eps_abs/eps_rel` (QP-KKT residual) | degrades **gracefully** (the RQ2 result: cos drops smoothly as eps loosens) |
+| **acados HPIPM (2nd-order IPM)** | `tau_min` (the barrier/smoothing) | the QP is solved **tightly regardless**; gradient is well-defined (tau_min>=1e-4, cos=1.0) or ill-defined (tau_min->0). `qp_solver_tol` overshoots and `qp_solver_iter_max` is bypassed in the diff config. |
+
+So for acados the meaningful axis is **tau_min (smoothing), not QP solve accuracy** — there is no
+"loosen the QP solve, watch the gradient degrade" curve like ADMM has, because the IPM converges the
+QP tightly in ~10 iters and the diff machinery forces a full solve. The fair cross-solver statement
+is therefore: ADMM trades gradient accuracy against solve cost (eps); acados fixes the solve (tight)
+and trades gradient *smoothness/bias* against the active-set fidelity (tau_min) — the two are
+controlling different things.
