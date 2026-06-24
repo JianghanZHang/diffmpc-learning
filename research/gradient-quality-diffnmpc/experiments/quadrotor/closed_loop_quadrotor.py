@@ -99,7 +99,10 @@ def run(n_samples, seed, use_slack, sqp_iter, umax, x0_scale=1.0):
     gAD = np.stack([_flat({k: g_d[k][i] for k in WK}) for i in range(n_samples)])
     print(f"[AD] {time.time()-t:.0f}s")
 
-    t = time.time(); eps_seq = (3e-5, 1e-5, 3e-6, 1e-6); per_eps = []
+    # Quadrotor cost noise floor ~8e-8 relative (cuDSS non-determinism over 50 chained 13-state
+    # solves) is ~100x the cartpole's, so the FD must use LARGER eps to clear it (diagnosed
+    # 2026-06-24: FD stable 1e-2..1e-4, noise-dominated below ~3e-5).
+    t = time.time(); eps_seq = (1e-3, 3e-4, 1e-4); per_eps = []
     for eps in eps_seq:
         cols = []
         for k in WK:

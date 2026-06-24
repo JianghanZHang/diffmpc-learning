@@ -524,12 +524,13 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   fixes the across-active-set gradient pathology *in closed loop*) and sharpens it: the fix is the soft-box
   *forward*. Artifacts: `experiments/linear_system/{closed_loop_accuracy.py,cl_b.py,cl_b_kappa_sweep.py,
   results/closed_loop_outliers.md}`, `experiments/cartpole/{closed_loop_cartpole.py,results/closed_loop_cartpole.md}`.
-  Quadrotor (nu=4 nonlinear) closed-loop: **tractable but convergence-confounded.** (The earlier
-  "intractable" claim was a GPU-contention artifact — clean runs: sqp=10 n=2 ≈120 s; the FD is just slow
-  ~40 min.) umax=1.2 (mild box): A-hardbox ≈ A-slack (both cos~1.0, both FD-flagged — box barely binds).
-  umax=1.05 (tight box, sqp=8): *mixed* — sample 4 shows the mechanism (hard cos 0.62/rel 2.8 → slack cos
-  1.0/rel 1.5e-3) but samples 0–1 have slack *worse*, and all 6/6 FD-flag → NLP under-convergence noise
-  (sqp=8 reduced for the slow FD) dominates the active-set signal. **No clean nu=4 confirmation**; a clean
-  one needs much tighter (≈2 h/pair) convergence. The clean mechanism stands on linear (nu=4) + cartpole
-  (nu=1 nonlinear). See `experiments/quadrotor/results/closed_loop_quadrotor_NOTE.md`. Still open: B on
-  nonlinear (multi-SQP custom_vjp); a tight-convergence drone run; whether these outliers degrade RL (RQ3).
+  Quadrotor (nu=4 nonlinear) closed-loop: **tractable; mechanism present but weak so far.** TWO false
+  starts corrected: (1) "intractable" was GPU contention (clean: sqp=10 n=2 ≈120 s); (2) a "cos=0.616
+  hard-box outlier" at umax=1.05 was an **FD-below-noise-floor artifact** — the rollout cost is
+  non-deterministic at ~8e-8 rel (cuDSS over 50 chained 13-state solves, ~100× the cartpole floor), so
+  FD eps must be ≈1e-3 not 1e-5 (corrected: that sample reads cos=0.99975). With corrected eps (umax=1.05):
+  slack uniformly FD-consistent (cos≥0.99999), hardbox nearly so (median 1.0, one sample cos 0.989) →
+  *weak* directional match to the linear/cartpole mechanism; the box barely engages, no dramatic pathology.
+  A very-tight umax=1.0 run is pending. See `experiments/quadrotor/results/closed_loop_quadrotor_NOTE.md`.
+  Lesson: the closed-loop FD noise floor is system-size-dependent. Clean mechanism stands on linear (nu=4)
+  + cartpole (nu=1 nonlinear). Still open: B on nonlinear (multi-SQP custom_vjp); RL-impact (RQ3).
