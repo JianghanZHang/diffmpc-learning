@@ -74,3 +74,34 @@ Re-run of A with **ADMM_FUSED_CUDSS** (GT = FD of the fused forward at tol 1e-9)
 affected: slack-box results (backends agree), B/central-path, acados tau_min sweep, B-no-slack=acados.
 TODO: re-verify the acados hard-box cross-check with the fused ADMM backward; revise NOTE.md.
 Default backend for A switched to ADMM_FUSED_CUDSS in closed_loop_4way_sweep.py. Script: backend_vs_fd.py.
+
+## FINAL clean result: 4 variants vs QP tolerance, tight GT (FD at 1e-11 forward)
+
+A on ADMM_FUSED_CUDSS; B central-path (kappa=1e-6); GT = convergence-checked FD of each config's
+forward at tol_gt=1e-11 (clean -- removes the 1e-9-forward noise-floor flagging). batch=64, seed=0.
+
+cos median (cos min) over non-flagged samples:
+
+| QP tol | A no-slack | A slack | B no-slack | B slack |
+|---:|---|---|---|---|
+| 1e-1 | 0.76 (-0.66) | 0.88 (-0.07) | 0.19 (-0.93) | 0.50 (-0.99) |
+| 1e-3 | 1.000 (1.000) | 1.000 (0.999) | 0.998 (-0.75) | 1.000 (0.90) |
+| 1e-5 | 1.000 (1.000) | 1.000 (1.000) | 1.000 (0.999) | 1.000 (1.000) |
+| 1e-7 | 1.000 (1.000) | 1.000 (1.000) | 1.000 (1.000) | 1.000 (1.000) |
+| 1e-9 | 1.000 (1.000) | 1.000 (1.000) | 1.000 (1.000) | 1.000 (1.000) |
+| GT-flagged | 3/64 | 3/64 | 6/64 | 2/64 |
+
+**No anomaly at tight tol:** for tol <= 1e-7 every config has cos median = cos min = 1.0 and ZERO
+outliers (#cos<0.99 = #cos<0 = 0). All four formulations produce the correct gradient once the QP is
+solved tightly -- the hard box is NOT a formulation defect (it needed the fused backend).
+
+**QP tolerance is the knob, not the formulation.** All four degrade as the solve loosens (loose-solve
+bias from the true gradient); they converge to cos 1.0 by tol<=1e-5. Loose-tol robustness ordering
+(@1e-1): A-slack 0.88 > A-noslack 0.76 > B-slack 0.50 > B-noslack 0.19 -- TurboMPC (A) gradients are
+more loose-solve-robust than central-path (B), and slack helps both.
+
+**Genuine non-smooth tail** (FD-flagged, excluded): 2-6 / 64 samples sit on true active-set boundaries
+where the gradient is ill-defined for any method. B-noslack has the most (6/64 -- the kappa=1e-6
+barrier-only smoothing leaves more borderline samples); B-slack the fewest (2/64, Moreau slack). This
+tail is irreducible (measure-zero set), not a backend/tolerance artifact. Scripts:
+closed_loop_4way_sweep.py, fd_refine.py, backend_vs_fd.py.
