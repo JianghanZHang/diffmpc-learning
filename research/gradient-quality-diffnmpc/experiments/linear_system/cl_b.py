@@ -66,15 +66,16 @@ def _solve_reduced_kkt_full(D_aug, E, eq_blocks, x_bar, nx, nu):
     return pack_x(lam_s, lam_c), mult
 
 
-def make_b_mpc_solve(solver, pp_base, schur, ig, nx, nu, kappa=KAPPA):
+def make_b_mpc_solve(solver, pp_base, schur, ig, nx, nu, kappa=KAPPA, cp_tol=None):
     """custom_vjp: b_solve(weights, state) -> (states, controls), diff w.r.t. weights AND state.
 
     Linear dynamics ⇒ no λᵀ∇²f term; the cost Hessian D is the exact Lagrangian Hessian. The
     state enters the QP via the initial-constraint RHS c0, so dL/dstate is the initial-constraint
-    adjoint (sign verified vs FD).
+    adjoint (sign verified vs FD). `cp_tol` overrides the central-path ADMM residual tolerance.
     """
     program = solver.program
     n0 = None  # set from the first build
+    _cp = CP if cp_tol is None else {**CP, "tol": cp_tol}
 
     def _qp1(weights, state):
         pp_i = {**pp_base, "initial_state": state, QK: weights[QK], RK: weights[RK]}
@@ -84,12 +85,12 @@ def make_b_mpc_solve(solver, pp_base, schur, ig, nx, nu, kappa=KAPPA):
     @jax.custom_vjp
     def b_solve(weights, state):
         qp1 = _qp1(weights, state)
-        x, _, _ = solve_qp_central_path(qp1, schur, target_kappa=kappa, slack_weight=GAMMA, **CP)
+        x, _, _ = solve_qp_central_path(qp1, schur, target_kappa=kappa, slack_weight=GAMMA, **_cp)
         return x[:, :nx], x[:, nx:]
 
     def b_fwd(weights, state):
         qp1 = _qp1(weights, state)
-        x, duals, _ = solve_qp_central_path(qp1, schur, target_kappa=kappa, slack_weight=GAMMA, **CP)
+        x, duals, _ = solve_qp_central_path(qp1, schur, target_kappa=kappa, slack_weight=GAMMA, **_cp)
         return (x[:, :nx], x[:, nx:]), (weights, state, qp1, x, duals)
 
     def b_bwd(res, g):
