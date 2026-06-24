@@ -151,3 +151,23 @@ quadrotor: its tight-box thrust is **firmly** active (large multiplier) → the 
 no pathology; the linear random systems have **marginal** activations → the hard mask errs. The
 confirming measurement (correlate per-sample cos with the *multiplier magnitude* of the active controls
 — small multipliers ⇒ pathological) is the clean next step; not yet run. Data: `switch_correlation.npz`.
+
+## Validation: the linear outliers are real, not an FD-noise artifact (eps-robust)
+
+After the quadrotor's "cos=0.616" turned out to be FD below the noise floor, I checked the same risk
+for the linear headline (`linear_noise_check.py`): the linear closed-loop cost is ~534, and its
+**noise floor is 6e-8 absolute / 7e-11 relative** — ~1000× lower (relative) than the quadrotor's
+(8e-8 rel), because the 8-state 1-SQP solves are far simpler than the 13-state quaternion-RK4 ones.
+So the small-eps FD was reliable here, and the outliers are **eps-robust**:
+
+| FD eps | hard-box cos median | cos min | #cos<0 | flagged |
+|---|---:|---:|---:|---:|
+| small (3e-5..1e-6) | 0.149 | −0.466 | 7 | 7/24 |
+| large (3e-3..1e-4) | 0.181 | −0.466 | 8 | 2/24 |
+
+The worst cosines are essentially identical (−0.466, −0.399, −0.319, …) at both eps scales. **The
+linear hard-box pathology is real**, not a noise artifact. Combined with the switching refutation
+above (cost locally smooth, FD reliable, AD wrong), the hard-box closed-loop gradient is *genuinely
+inconsistent* with the true gradient — a backward error, eps-robust and noise-clean. (The quadrotor
+looked milder partly because its ~1000× higher relative noise floor corrupted the small-eps FD,
+now corrected, and partly because its saturated thrust is firmly active rather than marginal.)
