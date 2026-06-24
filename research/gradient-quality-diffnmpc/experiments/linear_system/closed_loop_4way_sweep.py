@@ -51,6 +51,10 @@ GAMMA_SLACK, GAMMA_NOSLACK, KAPPA = 1e4, 1e12, 1e-6
 ADMM_MAX_ITER = 2000
 FD_EPS = (1e-4, 3e-5, 1e-5, 3e-6)
 LANE_CAP = 8192          # max parallel rollout lanes per vmap call (chunk the FD grid to bound memory)
+# A forward backend: ADMM_FUSED_CUDSS computes the CORRECT hard-box gradient (cos 1.0 vs FD); the
+# ADMM_JAX_LOOP_CUDSS_FFI forward returns duals that make the DIRECT backward wrong for the hard box
+# (cos 0.21 vs FD) -- see backend_vs_fd.py. Slack box agrees on both.
+A_FORWARD_BACKEND = ForwardBackend.ADMM_FUSED_CUDSS
 
 
 def _reward(s, c): return -(jnp.sum(s ** 2) + jnp.sum(c ** 2))
@@ -85,7 +89,7 @@ def cost_fn_A(dyn, pp, w, x0b, tol, slack):
     else:
         ppA = dict(pp); cls = OptimalControlProblem
     solver = TurboMPCSolver(program=cls(dynamics=dyn, params=ppA), params=sp,
-        forward_backend=ForwardBackend.ADMM_JAX_LOOP_CUDSS_FFI,
+        forward_backend=A_FORWARD_BACKEND,
         backward_backend=BackwardBackend.DIRECT_CUDSS_FFI, use_full_hessian=True)
     init = solver.solve(solver.initial_guess(ppA), problem_params=ppA, weights={**w, "initial_state": x0b[0]})
     cfg = ProblemConfig(dynamics=dyn, problem_class=cls, problem_params=ppA, solver_params=sp,
@@ -172,8 +176,11 @@ def main():
     p.add_argument("--batch", type=int, default=64)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--tol_gt", type=float, default=None, help="GT FD tolerance (default = tightest sweep tol)")
+    p.add_argument("--configs", type=str, nargs="+", default=None, help="subset of configs (default all 4)")
     a = p.parse_args()
     n = a.batch
+    configs = a.configs if a.configs else CONFIGS
+    assert all(c in CONFIGS for c in configs), f"--configs must be subset of {CONFIGS}"
     TOL_GT = a.tol_gt if a.tol_gt is not None else min(a.tolerances)
     print(f"Closed-loop 4-way (sim_steps={SIM_STEPS}) gradient ACCURACY vs QP tolerance [parallel]")
     print(f"  nx={NX} nu={NU} H={HORIZON} batch={n} seed={a.seed} kappa={KAPPA:g} "
@@ -185,7 +192,7 @@ def main():
     # --- Phase 1: per-config ground truth = FD at the tightest tolerance ---
     print("\n[Phase 1] ground-truth FD at tol_gt:")
     GT = {}
-    for name in CONFIGS:
+    for name in configs:
         t = time.time()
         cf = build_cost_fn(name, dyn, pp, w, x0b, A_sd, B_m, b_v, TOL_GT)
         gFD, fl = fd_gt(cf, w, x0b)
@@ -198,7 +205,7 @@ def main():
     for tol in a.tolerances:
         print(f"\n--- tol={tol:.0e} ---  {'config':>10} | {'cos med':>8} {'cos min':>8} {'GTflag':>8} "
               f"{'#cos<.99':>9} {'#cos<0':>7}")
-        for name in CONFIGS:
+        for name in configs:
             t = time.time()
             cf = build_cost_fn(name, dyn, pp, w, x0b, A_sd, B_m, b_v, tol)
             gAD = ad(cf, w, x0b)
@@ -215,7 +222,7 @@ def main():
     os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
     np.savez(os.path.join(_HERE, "results", "closed_loop_4way_sweep.npz"),
              tolerances=np.array(a.tolerances), batch=n, seed=a.seed, tol_gt=TOL_GT,
-             **{f"GTflag|{name}": GT[name][1] for name in CONFIGS},
+             **{f"GTflag|{name}": GT[name][1] for name in configs},
              **{f"{name}|{tol:.0e}|cos": results[(tol, name)]["cos"]
                 for (tol, name) in results})
     print("\nsaved results/closed_loop_4way_sweep.npz")

@@ -42,3 +42,35 @@ Script: `fused_check.py`.
 ## 4-way accuracy vs tolerance (GT = FD at tol 1e-9)
 
 (table pending the running batch=64 sweep)
+
+## CORRECTION: the hard-box "badness" for A was a backend bug (ADMM_JAX_LOOP_CUDSS_FFI), not the formulation
+
+The DIRECT backward fed by the ADMM_JAX_LOOP_CUDSS_FFI **forward** returns a WRONG hard-box gradient;
+the ADMM_FUSED_CUDSS forward returns the CORRECT one. Measured (backend_vs_fd.py, hard box, tol=1e-7):
+cos(jax-loop, FD)=0.21, cos(fused, FD)=1.00, cos(jax-loop, fused)=0.21. Slack box: both 1.00.
+(Likely cause, not yet directly inspected: the jax-loop forward's duals make the DIRECT backward read
+the wrong active set; the fused kernel's duals are correct. The jax-loop hard-box forward is also
+noisier — its FD GT flags 13/64 vs fused's 2/64.)
+
+Re-run of A with **ADMM_FUSED_CUDSS** (GT = FD of the fused forward at tol 1e-9):
+
+| tol | A no-slack JAX-loop | A no-slack FUSED | A slack FUSED |
+|---:|---:|---:|---:|
+| 1e-1 | 0.26 | 0.73 | 0.88 |
+| 1e-3 | 0.25 | 1.0000 | 1.0000 |
+| 1e-5 | 0.20 | 1.0000 | 1.0000 |
+| 1e-7 | 0.22 | 1.0000 | 1.0000 |
+| 1e-9 | 0.14 | 1.0000 | 1.0000 |
+| GT-flagged | 13/64 | 2/64 | 5/64 |
+
+**With the fused backend, A no-slack (hard box) reaches cos 1.0 at every tight tolerance** (>=1e-3),
+1 residual sign-flip, 2 genuinely non-smooth samples. So:
+- At tight tol ALL four formulations give the correct gradient (cos 1.0) -- the hard box is NOT broken.
+- At loose tol all degrade (loose-solve bias from the true gradient) -- formulation-independent.
+- Only ~5% of hard-box samples are genuinely non-smooth (true active-set boundaries), not 75-92%.
+
+**Scope:** any prior "hard box bad" result using the JAX-loop backward on the HARD box is confounded
+(earlier closed-loop "75-92% outliers"; the ADMM-leg cos 0.03 of the acados cross-check bd13da3). NOT
+affected: slack-box results (backends agree), B/central-path, acados tau_min sweep, B-no-slack=acados.
+TODO: re-verify the acados hard-box cross-check with the fused ADMM backward; revise NOTE.md.
+Default backend for A switched to ADMM_FUSED_CUDSS in closed_loop_4way_sweep.py. Script: backend_vs_fd.py.
