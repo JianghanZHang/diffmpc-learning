@@ -66,7 +66,7 @@ def _solve_reduced_kkt_full(D_aug, E, eq_blocks, x_bar, nx, nu):
     return pack_x(lam_s, lam_c), mult
 
 
-def make_b_mpc_solve(solver, pp_base, schur, ig, nx, nu):
+def make_b_mpc_solve(solver, pp_base, schur, ig, nx, nu, kappa=KAPPA):
     """custom_vjp: b_solve(weights, state) -> (states, controls), diff w.r.t. weights AND state.
 
     Linear dynamics ⇒ no λᵀ∇²f term; the cost Hessian D is the exact Lagrangian Hessian. The
@@ -84,12 +84,12 @@ def make_b_mpc_solve(solver, pp_base, schur, ig, nx, nu):
     @jax.custom_vjp
     def b_solve(weights, state):
         qp1 = _qp1(weights, state)
-        x, _, _ = solve_qp_central_path(qp1, schur, target_kappa=KAPPA, slack_weight=GAMMA, **CP)
+        x, _, _ = solve_qp_central_path(qp1, schur, target_kappa=kappa, slack_weight=GAMMA, **CP)
         return x[:, :nx], x[:, nx:]
 
     def b_fwd(weights, state):
         qp1 = _qp1(weights, state)
-        x, duals, _ = solve_qp_central_path(qp1, schur, target_kappa=KAPPA, slack_weight=GAMMA, **CP)
+        x, duals, _ = solve_qp_central_path(qp1, schur, target_kappa=kappa, slack_weight=GAMMA, **CP)
         return (x[:, :nx], x[:, nx:]), (weights, state, qp1, x, duals)
 
     def b_bwd(res, g):
@@ -166,7 +166,7 @@ def _cos(a, b): return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e
 def _rel(a, b): return float(np.linalg.norm(a - b) / (np.linalg.norm(b) + 1e-30))
 
 
-def run_B(n_samples, seed):
+def run_B(n_samples, seed, kappa=KAPPA):
     import time
     dyn, pp_t = build_turbompc_linear_problem(horizon=HORIZON, umax=UMAX, n_state=NX, n_ctrl=NU)
     Q, R, A, B, b, x0 = generate_problem_data(n_samples, seed, n_state=NX, n_ctrl=NU)
@@ -180,7 +180,7 @@ def run_B(n_samples, seed):
     ig = solver.initial_guess({**pp, "initial_state": x0_batch[0]})
     N = solver.program.horizon
     schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, NX, NU, pcg_params={"max_iter": 400, "tol_epsilon": 1e-12})
-    b_solve = make_b_mpc_solve(solver, pp, schur, ig, NX, NU)
+    b_solve = make_b_mpc_solve(solver, pp, schur, ig, NX, NU, kappa=kappa)
 
     def rollout_cost(weights, state):
         def step(carry, _):
@@ -234,6 +234,7 @@ def run_B(n_samples, seed):
     os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
     np.savez(os.path.join(_HERE, "results", "closed_loop_B.npz"), cosB=cosB, relB=relB, flagged=flagged, gB=gB, gFD=gFD)
     print("saved results/closed_loop_B.npz")
+    return cosB, relB, flagged
 
 
 if __name__ == "__main__":

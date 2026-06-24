@@ -75,3 +75,32 @@ cannot even plateau (the gradient ground truth is undefined there, not merely mi
 rollout plateaus cleanly on all 12 with AD=FD (cos=1.0, rel_l2~2e-6). The faithful horizon makes the
 hard-box policy *more* pathological and leaves the log-barrier policy untouched — the smoothing is what
 makes the closed-loop diffmpc-as-policy gradient exist at all.
+
+## B's outliers vs the smoothing strength κ (seed 0, n=16, H=20)
+
+B has zero outliers at κ=1e-6; does it inherit A's pathology as κ→0 (barrier → hard complementarity)?
+Sweeping κ over 8 orders of magnitude:
+
+| κ | med cos | #cos<0.99 | #flagged | **B outliers** | med rel_l2 |
+|---:|---:|---:|---:|---:|---:|
+| 1e-3 | 1.00000 | 0 | 0 | **0/16** | 1.5e-6 |
+| 1e-4 | 1.00000 | 0 | 0 | **0/16** | 1.7e-6 |
+| 1e-5 | 1.00000 | 0 | 0 | **0/16** | 1.5e-6 |
+| 1e-6 | 1.00000 | 0 | 0 | **0/16** | 1.7e-6 |
+| 1e-7 | 1.00000 | 0 | 0 | **0/16** | 1.5e-6 |
+| 1e-9 | 1.00000 | 0 | 0 | **0/16** | 1.8e-6 |
+| 1e-11 | 1.00000 | 0 | 0 | **0/16** | 1.7e-6 |
+
+**B is outlier-free across all κ — the result is insensitive to the barrier over 8 orders of magnitude.**
+Crucially, at κ=1e-11 the central-path complementarity relaxation is ≈0 (hard complementarity), yet B's
+rollout is still smooth (0 FD-flagged) and B's AD still matches FD (cos=1.0). So the closed-loop
+FD-consistency is provided by the **elastic slack** (the soft box `to_one_sided` builds with γ=1e4 —
+a C¹ penalty that smooths the active-set boundaries in the *forward* rollout), **not** the barrier κ
+(which only relaxes complementarity in the *backward*). The hard-box A (use_slack=False, the diffmpc
+default) lacks this and is the pathological one.
+
+Refinement of the headline: the closed-loop outliers are eliminated by the **soft/slack box
+formulation**; the log-barrier κ is a secondary backward refinement that is robust across a huge range.
+A direct control — TurboMPC's own slack backward (use_slack=True) in closed loop — would confirm it
+gives the same 0-outlier behavior as B; not yet run (the κ=1e-11 column is strong indirect evidence,
+since there the barrier is negligible and only the slack remains).
