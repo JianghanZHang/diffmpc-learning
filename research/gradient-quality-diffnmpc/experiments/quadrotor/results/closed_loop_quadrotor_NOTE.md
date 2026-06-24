@@ -1,40 +1,54 @@
-# Quadrotor closed-loop (nu=4 nonlinear): tractable; a noise-floor lesson; weak mechanism so far
+# Quadrotor closed-loop (nu=4 nonlinear): tractable; no dramatic pathology; two methodology lessons
 
 **Run 2026-06-24.** Closed-loop hard-box-vs-slack gradient study on the **nu=4 nonlinear quadrotor**
 (13 states, RK4, hover regulation, control box). Driver: `closed_loop_quadrotor.py`.
 
-## Two corrections (this experiment had two false starts — both methodological)
+## Two false starts, both corrected (methodology)
 
-1. **"Intractable" was wrong — GPU contention.** An early claim that the rollout-grad doesn't compile
-   was a leftover-process artifact. Clean runs: sqp=10 n=2 ≈120 s; full sweep AD ≈82 s. The FD is just
-   *slow* (~33–40 min/run), not intractable. See [[isolate-gpu-contention-before-boundary]].
-2. **A "cos=0.616 outlier" was wrong — FD below the noise floor.** Diagnosed (2026-06-24): the rollout
-   cost is non-deterministic at **~8e-8 relative** (cuDSS GPU non-determinism over 50 chained 13-state
-   solves) — ~100× the cartpole's floor. The original FD used eps **3e-5…1e-6**, *below* that floor, so
-   per-weight FD was noise-dominated and manufactured a spurious outlier (a sample that read cos=0.616
-   at small eps reads **cos=0.99975** with eps=1e-3). **Lesson: the convergence-checked FD's usable-eps
-   window has a system-dependent lower bound (the cost noise floor); the 13-state quadrotor needs
-   eps≈1e-3, not the cartpole's 1e-5.** The FD eps_seq is now `(1e-3, 3e-4, 1e-4)` for the quadrotor.
+1. **"Intractable" was GPU contention.** A leftover-process artifact; clean runs compile+run fine
+   (sqp=10 n=2 ≈120 s; AD ≈82 s; FD slow ~33–40 min). See [[isolate-gpu-contention-before-boundary]].
+2. **A "cos=0.616 hard-box outlier" was FD below the cost noise floor.** The rollout cost is
+   non-deterministic at **~8e-8 relative** (cuDSS over 50 chained 13-state solves, ~100× the cartpole's
+   floor). The original FD eps (3e-5…1e-6) sat below it → spurious noise → false outlier (that sample
+   reads cos=0.99975 at eps=1e-3). Fixed by using eps `(1e-3,3e-4,1e-4)`. See
+   [[fd-noise-floor-is-system-size-dependent]].
 
-## Results (noise-floor-corrected FD, eps 1e-3..1e-4, sqp=8, n=6)
+## Final results (noise-floor-corrected FD, sqp=8, n=6, seed 0)
 
-| box | backward | cos median | cos min | #cos<0.99 | max rel_l2 |
-|---|---|---:|---:|---:|---:|
-| umax=1.2 (mild) | hardbox | 1.00000 | 0.976 | — | — |
-|  | slack | 1.00000 | 0.964 | — | — |
-| umax=1.05 (tight) | hardbox | 0.99998 | **0.9890** | 1/6 | 1.6e-1 |
-|  | slack | 1.00000 | **0.99999** | 0/6 | 5e-3 |
-| umax=1.0 (very tight) | hardbox | *(pending)* | | | |
-|  | slack | *(pending)* | | | |
+| box (× hover) | hardbox cos min | hardbox rel max | slack cos min | slack rel max |
+|---|---:|---:|---:|---:|
+| umax=1.2  (1.22×) | 0.976 | — | 0.964 | — |
+| umax=1.05 (1.07×) | 0.989 | 1.6e-1 | 0.99999 | 4.7e-3 |
+| umax=1.00 (1.02×) | 0.99981 | 4.0e-2 | 0.99994 | 1.1e-2 |
 
-**So far the mechanism is present but WEAK.** At umax=1.05 the slack backward is uniformly
-FD-consistent (cos ≥ 0.99999, rel ≤ 5e-3) while the hard box deviates on one sample (cos 0.989, rel
-0.16). The direction matches the linear/cartpole finding (slack ≥ hardbox in FD-consistency), but the
-quadrotor box at umax=1.05 (≈1.07× hover) barely engages — the dramatic pathology (negative cos) seen
-on the linear nu=4 / cartpole tight box does NOT appear here. A **very tight** box (umax=1.0, ≈1.02×
-hover, thrust saturates immediately) is running to see whether the signal strengthens (or the recovery
-becomes infeasible). Data: `closed_loop_quadrotor_*_umax{1p2,1p05_bigeps,1p0}.npz`.
+## Findings
 
-The clean confirmation of the mechanism stands on the linear (nu=4) and cartpole (nu=1 nonlinear)
-systems. The quadrotor's contribution so far: (a) the approach scales to 13 states; (b) a real
-methodological caveat — the closed-loop FD noise floor is system-size-dependent and must be cleared.
+- **No dramatic hard-box pathology at any tested box.** Unlike the linear nu=4 (cos down to −0.47) and
+  cartpole tight box (cos −0.81), the quadrotor hard box never drops below **cos 0.989**, and at the
+  *tightest* box (umax=1.00) it is actually *cleaner* (cos ≥ 0.9998, #cos<0.99 = 0).
+- **A consistent but weak directional signal**: the slack backward is always slightly more
+  FD-consistent than the hard box (cos min 0.99999/0.99994 vs 0.989/0.99981; rel ~10–30× smaller). The
+  *direction* matches the linear/cartpole mechanism (slack ≥ hard box), but the *magnitude* is tiny.
+- **Tightening the box does NOT worsen the hard box** (umax 1.05→1.00 made it cleaner). This is the key
+  clue.
+
+## Interpretation (HYPOTHESIS — not directly measured)
+
+The dramatic hard-box pathology is plausibly driven by active-set **switching** (controls flipping
+active/inactive as the cost weights vary), not by constraint binding per se. At near-hover with a tight
+box the quadrotor's thrust is **continuously saturated → the active set is stable → few switches →
+smooth gradient**, even though the box is firmly active. The linear-random nu=4 systems and the cartpole
+tight-regulation have frequent switching → the dramatic pathology; the quadrotor *hover* does not.
+**This is a conjecture**: the confirming measurement would instrument the rollout to count active-set
+changes (controls entering/leaving the bound) across the FD weight perturbations and correlate that
+count with the per-sample hard-box cos. Not run this session.
+
+## Bottom line
+
+The clean, dramatic confirmation of "hard-box closed-loop outliers, fixed by the soft/slack box" stands
+on the **linear (nu=4)** and **cartpole (nu=1 nonlinear)** systems. The quadrotor adds: (a) the
+differentiable-rollout approach **scales to 13 states** (tractable, just a slow FD); (b) the pathology
+is **not universal** — the nu=4 nonlinear *hover* regime shows only a weak directional version, likely
+because its tight-box active set is stable rather than switching. Data:
+`closed_loop_quadrotor_*_umax{1p2,1p05_bigeps,1p0}.npz`. A switching-heavy nonlinear regime (e.g.
+aggressive trajectory tracking, not hover) would be the right testbed to see the dramatic form at nu=4.

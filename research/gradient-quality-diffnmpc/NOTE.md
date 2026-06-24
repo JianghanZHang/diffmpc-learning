@@ -524,13 +524,17 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   fixes the across-active-set gradient pathology *in closed loop*) and sharpens it: the fix is the soft-box
   *forward*. Artifacts: `experiments/linear_system/{closed_loop_accuracy.py,cl_b.py,cl_b_kappa_sweep.py,
   results/closed_loop_outliers.md}`, `experiments/cartpole/{closed_loop_cartpole.py,results/closed_loop_cartpole.md}`.
-  Quadrotor (nu=4 nonlinear) closed-loop: **tractable; mechanism present but weak so far.** TWO false
-  starts corrected: (1) "intractable" was GPU contention (clean: sqp=10 n=2 ≈120 s); (2) a "cos=0.616
-  hard-box outlier" at umax=1.05 was an **FD-below-noise-floor artifact** — the rollout cost is
-  non-deterministic at ~8e-8 rel (cuDSS over 50 chained 13-state solves, ~100× the cartpole floor), so
-  FD eps must be ≈1e-3 not 1e-5 (corrected: that sample reads cos=0.99975). With corrected eps (umax=1.05):
-  slack uniformly FD-consistent (cos≥0.99999), hardbox nearly so (median 1.0, one sample cos 0.989) →
-  *weak* directional match to the linear/cartpole mechanism; the box barely engages, no dramatic pathology.
-  A very-tight umax=1.0 run is pending. See `experiments/quadrotor/results/closed_loop_quadrotor_NOTE.md`.
-  Lesson: the closed-loop FD noise floor is system-size-dependent. Clean mechanism stands on linear (nu=4)
-  + cartpole (nu=1 nonlinear). Still open: B on nonlinear (multi-SQP custom_vjp); RL-impact (RQ3).
+  Quadrotor (nu=4 nonlinear) closed-loop: **tractable; NO dramatic pathology in the hover regime.** (Two
+  corrected false starts: "intractable" = GPU contention; "cos=0.616 outlier" = FD below the ~8e-8-rel
+  cuDSS noise floor — fixed with eps≈1e-3; see [[isolate-gpu-contention-before-boundary]],
+  [[fd-noise-floor-is-system-size-dependent]].) Final (noise-floor-corrected FD, 3 boxes umax 1.2/1.05/1.0):
+  the hard box never drops below cos 0.989 and is *cleaner* at the tightest box (cos≥0.9998); slack is
+  always slightly cleaner (a *weak* consistent directional match to the mechanism), but nothing like the
+  linear/cartpole negative-cosine collapse. **Hypothesis (not measured):** the dramatic pathology needs
+  active-set *switching*; at near-hover the thrust is continuously saturated → stable active set → few
+  switches → smooth, even though the box binds firmly. So the pathology is **not universal** — it depends
+  on the regime, not just nu. Clean/dramatic form stands on linear (nu=4) + cartpole (nu=1 nonlinear);
+  the quadrotor adds "scales to 13 states" + this regime-dependence refinement. See
+  `experiments/quadrotor/results/closed_loop_quadrotor_NOTE.md`. Still open: a switching-heavy nonlinear
+  regime (aggressive tracking, not hover) to test the dramatic form at nu=4; B on nonlinear (multi-SQP
+  custom_vjp); RL-impact (RQ3).
