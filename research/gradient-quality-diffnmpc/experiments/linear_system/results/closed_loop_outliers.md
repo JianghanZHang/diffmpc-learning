@@ -104,3 +104,26 @@ formulation**; the log-barrier κ is a secondary backward refinement that is rob
 A direct control — TurboMPC's own slack backward (use_slack=True) in closed loop — would confirm it
 gives the same 0-outlier behavior as B; not yet run (the κ=1e-11 column is strong indirect evidence,
 since there the barrier is negligible and only the slack remains).
+
+## Mechanism control: slack box vs hard box vs log-barrier (seed 0)
+
+The κ-sweep implied the smoothness comes from the slack, not the barrier. Direct test — run the
+closed-loop with **TurboMPC's own slack box** (use_slack=True, γ=1e4, its native analytic backward),
+no log-barrier:
+
+| backward | n | median cos | #cos<0.99 | #cos<0 | FD-flagged | **outliers** |
+|---|---:|---:|---:|---:|---:|---:|
+| A — hard box (use_slack=False, diffmpc default) | 24 | 0.204 | 19 | 9 | 9 | **19/24 (79%)** |
+| A — slack box (use_slack=True, TurboMPC native) | 16 | 1.00000 | 0 | 0 | 3 | **3/16 (mild flags only)** |
+| B — log-barrier (slack + κ=1e-6) | 16 | 1.00000 | 0 | 0 | 0 | **0/16** |
+
+**Confirmed: the soft/slack box is what fixes the closed-loop outliers.** Switching the *forward*
+from the hard box to the slack box (a C¹ penalty) collapses ~79% outliers to ~0 — TurboMPC's own
+slack backward is already FD-consistent in closed loop. The log-barrier κ adds only a *marginal*
+extra smoothing (the slack's 3 residual FD-flags → 0 for B). So the corrected, fully-measured story:
+
+- The diffmpc-benchmark outliers are a property of the **hard active-set box** (use_slack=False).
+- They are eliminated by the **soft/slack formulation** — available both as TurboMPC's `use_slack=True`
+  and as B's log-barrier (which builds the same soft box via `to_one_sided` with γ).
+- The log-barrier **κ is not the essential ingredient** (κ-insensitive over 1e-11..1e-3; A-slack works
+  without any barrier); it contributes a small additional smoothing on top of the slack.

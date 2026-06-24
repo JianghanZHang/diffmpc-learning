@@ -29,7 +29,7 @@ for _p in (os.path.join(_DL_ROOT, "src"), os.path.join(_DL_ROOT, "diffmpc2"),
 
 from benchmark_problem_setup import build_turbompc_linear_problem  # noqa: E402
 from utils import generate_problem_data, N_STATE, N_CTRL  # noqa: E402
-from turbompc.problems.optimal_control_problem import OptimalControlProblem  # noqa: E402
+from turbompc.problems.optimal_control_problem import OptimalControlProblem, OptimalControlProblemSlack  # noqa: E402
 from turbompc.solvers.turbompc_solver import TurboMPCSolver, ForwardBackend, BackwardBackend  # noqa: E402
 from turbompc.utils.load_params import load_solver_params  # noqa: E402
 from turbompc.utils.timing import ProblemConfig, build_rollout_fn  # noqa: E402
@@ -41,6 +41,7 @@ WK = [QK, RK]
 SIM_STEPS = 50
 HORIZON = 20
 UMAX = 1.0
+GAMMA = 1.0e4  # slack penalty (matched to B) when --slack: TurboMPC's soft-box control
 TIGHT = 1e-9   # tight solve so AD/FD reflect the true rollout gradient (image used GT@1e-9)
 
 
@@ -73,7 +74,7 @@ def _solver_params(eps):
     return sp
 
 
-def run_A(n_samples, seed, verbose=True):
+def run_A(n_samples, seed, use_slack=False, verbose=True):
     dyn, pp_t = build_turbompc_linear_problem(horizon=HORIZON, umax=UMAX, n_state=NX, n_ctrl=NU)
     Q, R, A, B, b, x0 = generate_problem_data(n_samples, seed, n_state=NX, n_ctrl=NU)
     pp = dict(pp_t)
@@ -81,15 +82,19 @@ def run_A(n_samples, seed, verbose=True):
     pp[QK] = jnp.asarray(np.diag(Q)); pp[RK] = jnp.asarray(np.diag(R))
     x0_batch = jnp.asarray(x0)
     w = {k: pp[k] for k in WK}
+    # --slack: TurboMPC's own soft-box control (the mechanism test: slack vs hard box)
+    prob_cls = OptimalControlProblemSlack if use_slack else OptimalControlProblem
+    if use_slack:
+        pp = {**pp, "use_slack_variables": True, "slack_penalization_weight": GAMMA}
 
     sp = _solver_params(TIGHT)
     solver = TurboMPCSolver(
-        program=OptimalControlProblem(dynamics=dyn, params=pp), params=sp,
+        program=prob_cls(dynamics=dyn, params=pp), params=sp,
         forward_backend=ForwardBackend.ADMM_JAX_LOOP_CUDSS_FFI,
         backward_backend=BackwardBackend.DIRECT_CUDSS_FFI, use_full_hessian=True)
     init_solution = solver.solve(solver.initial_guess(pp), problem_params=pp, weights={**w, "initial_state": x0_batch[0]})
 
-    cfg = ProblemConfig(dynamics=dyn, problem_class=OptimalControlProblem, problem_params=pp,
+    cfg = ProblemConfig(dynamics=dyn, problem_class=prob_cls, problem_params=pp,
                         solver_params=sp, weight_keys=WK, reward_fn=_reward,
                         update_per_seed=lambda s, b_, p: ({}, None))
     rollout = build_rollout_fn(config=cfg, solver=solver, problem_params=pp,
@@ -139,12 +144,14 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--n_samples", type=int, default=64)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--slack", action="store_true", help="TurboMPC soft/slack box control (vs hard box)")
     args = p.parse_args()
-    print(f"Closed-loop (sim_steps={SIM_STEPS}) gradient accuracy, A vs FD: nx={NX} nu={NU} H={HORIZON} "
+    tag = "A-slack" if args.slack else "A-hardbox"
+    print(f"Closed-loop (sim_steps={SIM_STEPS}) gradient accuracy, {tag} vs FD: nx={NX} nu={NU} H={HORIZON} "
           f"umax={UMAX} tol={TIGHT} n_samples={args.n_samples}")
-    cosA, relA, flagged, gA, gFD = run_A(args.n_samples, args.seed)
+    cosA, relA, flagged, gA, gFD = run_A(args.n_samples, args.seed, use_slack=args.slack)
     keep = ~flagged
-    print(f"\n=== A (TurboMPC) vs convergence-checked FD, {int(keep.sum())}/{args.n_samples} non-flagged ===")
+    print(f"\n=== {tag} vs convergence-checked FD, {int(keep.sum())}/{args.n_samples} non-flagged ===")
     print(f"  cos:    median={np.median(cosA[keep]):.5f}  min={np.min(cosA[keep]):.5f}  "
           f"#<0.99={int((cosA[keep]<0.99).sum())}  #<0={int((cosA[keep]<0).sum())}")
     print(f"  rel_l2: median={np.median(relA[keep]):.2e}  max={np.max(relA[keep]):.2e}")
@@ -153,9 +160,10 @@ def main():
     for i in order[:10]:
         print(f"    sample {i:3d}: cos={cosA[i]:+.5f} rel={relA[i]:.2e} flagged={bool(flagged[i])}")
     os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
-    np.savez(os.path.join(_HERE, "results", "closed_loop_A.npz"),
+    fname = "closed_loop_A_slack.npz" if args.slack else "closed_loop_A.npz"
+    np.savez(os.path.join(_HERE, "results", fname),
              cosA=cosA, relA=relA, flagged=flagged, gA=gA, gFD=gFD)
-    print(f"\nsaved results/closed_loop_A.npz")
+    print(f"\nsaved results/{fname}")
 
 
 if __name__ == "__main__":
