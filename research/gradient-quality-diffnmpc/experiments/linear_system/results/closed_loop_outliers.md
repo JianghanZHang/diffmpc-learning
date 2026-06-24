@@ -127,3 +127,27 @@ extra smoothing (the slack's 3 residual FD-flags → 0 for B). So the corrected,
   and as B's log-barrier (which builds the same soft box via `to_one_sided` with γ).
 - The log-barrier **κ is not the essential ingredient** (κ-insensitive over 1e-11..1e-3; A-slack works
   without any barrier); it contributes a small additional smoothing on top of the slack.
+
+## What drives the per-sample pathology? (switching hypothesis REFUTED; it's a backward error)
+
+Earlier I conjectured the hard-box pathology is driven by active-set *switching* (forward
+discontinuities/kinks). **Direct measurement on the linear data refutes that** (`switch_correlation.py`,
+seed 0, n=24): perturbing the cost weights by eps=1e-3 flips the saturation status of **zero** applied
+controls for **every** sample, yet the pathology is fully present. Combined with the convergence-checked
+FD *plateauing* (smooth) at eps 1e-5 for these non-flagged samples, the cost-vs-weights map is **locally
+smooth exactly where the hard AD is wrong** (cos −0.47). So the pathology is **not** a forward kink /
+active-set switch — it is a **backward inconsistency**: the hard active-set backward returns a gradient
+that disagrees with the (smooth, well-defined) FD gradient.
+
+It correlates moderately with the **saturation fraction**, not switching:
+`Spearman(cos, sat_frac) = −0.41` (outliers median sat_frac 0.040 vs clean 0.015);
+`Spearman(cos, u0_switch_flips) = −0.25` but the flip counts are all 0, so that number is noise.
+
+**Refined mechanism (conjecture, partially measured):** the hard backward errs at **marginally-active**
+controls — pinned at the bound with a near-zero multiplier (strict-complementarity failure) — where its
+binary active/inactive mask zeroes a sensitivity that is actually nonzero. The soft/slack backward
+replaces the mask with a smooth weight `W = y_g/(s+y_g/γ)` and stays FD-consistent. This reconciles the
+quadrotor: its tight-box thrust is **firmly** active (large multiplier) → the hard mask is correct →
+no pathology; the linear random systems have **marginal** activations → the hard mask errs. The
+confirming measurement (correlate per-sample cos with the *multiplier magnitude* of the active controls
+— small multipliers ⇒ pathological) is the clean next step; not yet run. Data: `switch_correlation.npz`.
