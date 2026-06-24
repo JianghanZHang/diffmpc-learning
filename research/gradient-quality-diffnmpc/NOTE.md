@@ -505,3 +505,24 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   bug**; closed its flagged test-coverage gaps (interior W path, `dL/dE`, nontrivial-D guard). Establishes
   backward *correctness*; the across-active-set *smoothness* advantage (H1.2) is the next measurement (E1.7).
   Tests: `tests/python/solvers/test_backward_central_path.py` (5/5; full suite 14/14).
+- **2026-06-24** — **E1.7 / H1.2 measured (RQ1): the hard active-set backward produces closed-loop gradient
+  outliers; the soft/slack (incl. log-barrier) formulation eliminates them.** First made the κ-relaxed ADMM
+  fast: ported TurboMPC's accelerated ADMM (over-relax α=1.6, OSQP adaptive ρ + Schur rebuild, residual stop)
+  into `solve_qp_central_path` → **iteration parity 1:1** with TurboMPC (was ~100×; `test_central_path_speed.py`;
+  the earlier "B ~100× worse / fragile" sweep result was a solver-tuning + step-norm-criterion artifact, now
+  removed). Then the **50-step closed-loop** per-sample gradient-accuracy sweep ("as in diffmpc", 1 SQP iter on
+  random linear MPC; built a custom_vjp B-solve differentiable w.r.t. weights **and** rollout state, FD-verified):
+  **A** (TurboMPC **hard box**, the diffmpc default) is an outlier on **42/56 (75%)** samples across 3 systems
+  (median cos 0.20–0.88, negative cosines, rel-ℓ₂ up to ~10³); at the faithful H=40 it is **non-differentiable**
+  on 11/12 (FD won't plateau). **B** (log-barrier) has **~0** outliers (cos=1.0, rel-ℓ₂~1e-6 on every sample
+  incl. all of A's failures). **Mechanism (measured, not assumed):** a κ-sweep shows B is outlier-free across
+  κ∈[1e-11,1e-3] (insensitive); a direct control with TurboMPC's **own slack box** (`use_slack=True`) is *also*
+  ~0 outliers → **the soft/slack forward (C¹) is the driver, not the barrier κ** (the hard active-set box is the
+  pathological one; κ adds only marginal smoothing). **Generalizes to nonlinear** (cartpole regulation, nu=1):
+  gated by active-set engagement — mild box (rarely binds) clean for both; **tight box** (umax=0.5, control
+  saturates) → A-hardbox 8/8 non-differentiable (cos −0.81…+0.88), A-slack cos=1.0. Settles H1.2 (smoothing
+  fixes the across-active-set gradient pathology *in closed loop*) and sharpens it: the fix is the soft-box
+  *forward*. Artifacts: `experiments/linear_system/{closed_loop_accuracy.py,cl_b.py,cl_b_kappa_sweep.py,
+  results/closed_loop_outliers.md}`, `experiments/cartpole/{closed_loop_cartpole.py,results/closed_loop_cartpole.md}`.
+  Open: lift to a nu≥4 *nonlinear* system (drone) and to B on nonlinear (needs a multi-SQP custom_vjp); whether
+  these closed-loop outliers actually degrade RL training (RQ3).
