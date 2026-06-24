@@ -47,3 +47,14 @@ In closed loop, **A (the diffmpc hard-box backward) is an outlier on 19/24 sampl
 **B (log-barrier) has 1/24 outliers**: on *every* sample — including the exact ones where A fails — B matches its FD to cos=1.0 / rel_l2~1e-6. The smoothing makes the closed-loop policy gradient well-defined and FD-consistent, eliminating the hard-backward outliers (the H1.2 payoff, in closed loop).
 
 Caveats (per CLAUDE.md): A and B solve slightly different problems (hard box vs kappa=1e-6 barrier); each AD is checked against *its own* rollout's convergence-checked FD (self-consistency). n=24, one random system, H=20 (reduced from 40 for compile tractability of the differentiable 50-step rollout).
+
+## Robustness across systems (seeds 0,1,2 — 3 random linear systems)
+
+| seed | n | A median cos | A #cos<0.99 | A #cos<0 | **A outliers** | B median cos | B #cos<0.99 | **B outliers** |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 24 | 0.204 | 19 | 9 | **19** | 1.00000 | 0 | **1** |
+| 1 | 16 | 0.171 | 12 | 6 | **12** | 1.00000 | 0 | **1** |
+| 2 | 16 | 0.883 | 10 | 1 | **11** | 1.00000 | 0 | **0** |
+| **all** | 56 | 0.473 | 41 | 16 | **42/56** | 1.00000 | 0 | **2/56** |
+
+**Across 3 random systems / 56 samples: A is an outlier on 42/56 (75%), B on 2/56 (4%).** Every B outlier is an FD-plateau edge case with cos=1.0; B has zero cos<0.99 on all three systems. The hard-box backward's closed-loop outliers (and their elimination by the log-barrier smoothing) are robust to the random system, not a seed-0 artifact.
