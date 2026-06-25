@@ -538,3 +538,26 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   `experiments/quadrotor/results/closed_loop_quadrotor_NOTE.md`. Still open: a switching-heavy nonlinear
   regime (aggressive tracking, not hover) to test the dramatic form at nu=4; B on nonlinear (multi-SQP
   custom_vjp); RL-impact (RQ3).
+- **2026-06-25** — **Single-common-GT redesign + TRI-benchmark reproduction with a validated FD.** (a)
+  Rebuilt the 4-variant linear closed-loop sweep against **one** common ground truth — the FD of the *true
+  hard-constrained* loss, same 64 samples for all variants (`closed_loop_gradient_accuracy.py`,
+  `results/gradient_accuracy.md`, B=64 H=160). Fixes the earlier per-config-GT apples-to-oranges. Findings:
+  hard box & log-barrier are **faithful** (cos 1.0) once solved tightly; the **Moreau slack** gradient is
+  biased from the hard-constrained gradient by the **relaxation, not a bug** — error scales **exactly
+  O(1/γ)** (`gamma_scaling.py`: rel-err 22→0.0024 for γ=1e4→1e8, 10×/decade) and **compounds with horizon**
+  (cos 0.9998→0.205 over 5→50 steps), so γ=1e4 needs ~1e7 for a faithful 50-step gradient. (b) The hard-box
+  `DIRECT_CUDSS_FFI` backward has **systematic-but-rare outliers** (~4–12% of samples, at near-boundary
+  controls): the true sensitivity is well-defined (barrier κ→0 gives cos 1.0, stable; strict-comp/LICQ/SOSC
+  all hold) and the **barrier computes it correctly**, so it is a **data-dependent DIRECT-backward failure**
+  (solver-independent: cuDSS≡JAX-dense give the identical wrong value; stable across fwd tol) — a fixable-flaw
+  vs inherent-active-set-fragility distinction left **unsettled** (review corrected two over-claims of mine:
+  the multiplier magnitude does not enter `dx/dθ`, and an interior barrier has no active set to compare).
+  (c) **Reproduced `run_sweeps_gradient_accuracy.sh`** (horizon 40, 100 seeds, fused/DIRECT) with a
+  **convergence-validated FD** (`benchmark_repro.py`, `results/benchmark_repro.{md,png,npz}`). The
+  benchmark's single `fd_eps=1e-5` is **essentially fine** (converged per-sample; only marginally into the
+  batch-sum noise floor; validated `1e-4` gives the same answer). Key result: the benchmark's **batch-summed
+  cosine** (`cos(Σ_i g_i)`, its headline metric) is **outlier-dominated → median ~0.07** at tight tol, while
+  the **per-sample median is 1.000**; removing the ~4–8/64 outliers per seed sends the batch-sum cos to
+  **1.000**. So `cos(Σg)` is governed by whichever sample has the largest wrong ‖g‖, not by typical accuracy
+  — per CLAUDE.md (per-sample, never batch-summed). Open cross-check (not yet run): execute the actual
+  benchmark to confirm it lands on ~0.1 (my reproduction uses its exact solver/backends/setup).
