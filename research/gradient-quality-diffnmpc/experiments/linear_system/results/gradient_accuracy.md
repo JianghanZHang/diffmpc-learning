@@ -94,8 +94,16 @@ while the hard box does not. Ruled out, in order:
 
 **Bottom line: the FD ground truth is correct.** On the only sample where it looked suspicious it
 agrees with the independent log-barrier gradient (cos 1.0); the discrepancy is in the hard-box
-*analytic* backward (QP ill-conditioning), not the finite differences. On the other 63/64, FD vs
-analytic agree to 0.15%.
+*analytic* backward, not the finite differences. On the other 63/64, FD vs analytic agree to 0.15%.
+
+**This DIRECT-backward imprecision is systematic but rare** (`directbwd_recurrence.py`, hard-box DIRECT
+vs barrier gradient across 4 seeds): **11/256 = 4.3%** of samples (1–4 per seed, always near-active
+constraints, cos down to −0.26), and on *every* one the barrier gradient is correct. So the hard-box
+gradient is faithful *in principle* (well-defined — confirmed by the κ→0 sweep) but the
+`DIRECT_CUDSS_FFI` backward **fails numerically on ~4% of near-active samples**, whereas the log-barrier
+(κ=1e-6) is robust on all of them. Net: the **log-barrier wins on all three counts** — faithful (cos 1.0,
+unlike the Moreau slack's 0.2), no horizon-compounding bias, and numerically robust where the hard-box
+DIRECT backward is not.
 
 Scripts: `closed_loop_gradient_accuracy.py` (main), `fd_diagnose.py` (noise-floor),
 `strict_comp_check.py` (κ/√κ degeneracy), `fwd_conv_check.py` (forward convergence). Data:
