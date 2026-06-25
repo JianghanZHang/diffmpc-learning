@@ -112,16 +112,20 @@ DIRECT backward is not.
   diverge between solvers). Both accurately solve the *same* KKT, which encodes the wrong gradient.
 - **Not brittle.** sample-45 cos is stable (0.033) across forward tol 1e-7…1e-11 — a *systematic*
   formulation error, not a precision-sensitive active-set flip.
-- **It is a DIRECT-backward implementation bug, not a conceptual limitation.** All regularity conditions
-  hold (strict comp, LICQ, SOSC) and the forward converged. Under exactly those conditions the barrier/IPM
-  sensitivity provably converges to the active-set (IFT) sensitivity as κ→0 (Frey/Diehl Thm 2–3), and we
-  measured it converged and stable (cos 1.0 from κ=1e-6 to 1e-10). So the true hard-box active-set
-  sensitivity **is well-defined and equals cos 1.0** — and the DIRECT backward returning 0.033 means it
-  **computes that sensitivity incorrectly** on the ~4% of samples with a control at the bound. (NB: the
-  multiplier *magnitude* does not enter `dx/dθ` — only the active constraint Jacobians do — and the
-  barrier, being interior, has no active set; so the bug is in the hard-box `DIRECT` KKT assembly, not a
-  binary-vs-smooth distinction. Pinning the exact line needs tracing the active-set assembly /`-eps_reg`
-  vs the primal active set; the barrier sidesteps it entirely.)
+- **A deterministic, data-dependent failure of the `DIRECT` active-set sensitivity at near-boundary
+  samples — mechanism not yet pinned.** All regularity conditions hold (strict comp, LICQ, SOSC) and the
+  forward converged; under those conditions the barrier/IPM sensitivity provably converges to the
+  active-set (IFT) sensitivity as κ→0 (Frey/Diehl Thm 2–3), measured converged and stable (cos 1.0 from
+  κ=1e-6 to 1e-10). So the true sensitivity **is well-defined = cos 1.0**, and the hard-box `DIRECT` path
+  produces a wrong gradient *only* on the ~4% of samples with a control at the bound. It is **not** a
+  generic code error (it is correct on the other 96%), **not** the linear solve (cuDSS ≡ JAX-DENSE give
+  the identical 0.033), and **not** precision (stable across forward tol). WHY it fails at the boundary —
+  a fixable flaw (active-set threshold / the `-eps_reg` inactive-row regularization) vs inherent numerical
+  fragility of the active-set assembly at near-degenerate structure — is **undetermined**. (The multiplier
+  *magnitude* does not enter `dx/dθ`, and the barrier is interior with no active set, so this is not a
+  binary-vs-smooth distinction.) Settling bug-vs-inherent needs building the active-set IFT sensitivity
+  from the primal active set and comparing to `DIRECT` (0.033) and the barrier (1.0). Either way the
+  barrier sidesteps it.
 
 Scripts: `closed_loop_gradient_accuracy.py` (main), `fd_diagnose.py` (noise-floor),
 `strict_comp_check.py` (κ/√κ degeneracy), `fwd_conv_check.py` (forward convergence). Data:
