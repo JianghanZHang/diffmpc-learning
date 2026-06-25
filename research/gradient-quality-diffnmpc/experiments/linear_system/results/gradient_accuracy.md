@@ -31,18 +31,24 @@ B-slack)=1.0000). Script: `closed_loop_gradient_accuracy.py`.
    (it *is* the GT) and B no-slack (barrier κ=1e-6) reach **cos 1.0** once solved tightly (A by
    tol≤1e-3, B by tol≤1e-5 — the central-path solve converges slower).
 
-2. **The Moreau slack (γ=1e4) gradient is BIASED from the true hard-constrained gradient, and the bias
-   does NOT vanish with a tighter solve.** A-slack and B-slack sit at **cos≈0.205, flat across AD
-   tolerance**. It is a **formulation** bias, not a numerical one — confirmed by two *independent*
-   solvers (TurboMPC ADMM, central-path ADMM) on the same Moreau formulation agreeing on 0.205 (and
-   cos(A-slack,B-slack)=1.0 with each other).
+2. **The Moreau slack (γ=1e4) gradient is biased from the true hard-constrained gradient — this is the
+   relaxation, NOT a bug and NOT a solve-tolerance issue.** A-slack and B-slack sit at **cos≈0.205, flat
+   across AD tolerance** (so it is not solve accuracy), and two *independent* solvers agree
+   (cos(A-slack,B-slack)=1.0). Three diagnostics pin the mechanism (`gamma_sweep.py`, `loose_bound_check.py`):
+   - **γ→∞**: cos rises **0.205 (γ=1e4) → 0.535 → 0.971 → 1.000 (γ=1e8)** — the slack gradient *converges*
+     to the hard gradient (a bug would not).
+   - **horizon**: cos degrades **0.9998 (5 steps) → 0.776 (20) → 0.205 (50)** — the error compounds with
+     rollout length.
+   - **box tightness**: cos rises **0.228 (umax=1) → 0.621 (2) → 1.000, 0/64 outliers (umax=20)** — it
+     vanishes once no control is active.
 
-3. **The bias COMPOUNDS over the closed loop** (interpretation; sim_steps sweep pending to confirm): at
-   SIM_STEPS=5 the smoke test gave A-slack cos **0.9994**; at SIM_STEPS=50 it is **0.205**. The
-   per-step Moreau violation O(1/γ)=1e-4 accumulates over the long rollout and rotates the gradient
-   away from the true hard-constrained one.
+   **Mechanism:** a control on the bound is *pinned* in the hard box (`du/dθ=0`) but *soft* in the slack
+   box (`du/dθ ≈ −(dy/dθ)/γ ≠ 0`). This per-step O(1/γ)≈1e-4 gradient mismatch, present only at active
+   controls, **accumulates through the closed-loop rollout**: γ=1e4 over 50 steps compounds to cos 0.2.
+   So γ=1e4 is too soft to get an accurate *gradient* over a 50-step horizon, even though the *solution*
+   stays within ~1e-4 — fixed by larger γ, a shorter horizon, or a looser box.
 
-4. **At loose tol (1e-1) everyone is wrong** (even A no-slack = the GT, at 0.14) — a loose solve biases
+3. **At loose tol (1e-1) everyone is wrong** (even A no-slack = the GT, at 0.14) — a loose solve biases
    every gradient regardless of formulation.
 
 **Why the redesign mattered:** the earlier per-config ground truths hid finding 2 entirely — each
