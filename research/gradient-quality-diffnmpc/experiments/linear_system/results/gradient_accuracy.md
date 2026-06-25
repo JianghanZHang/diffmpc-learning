@@ -112,13 +112,16 @@ DIRECT backward is not.
   diverge between solvers). Both accurately solve the *same* KKT, which encodes the wrong gradient.
 - **Not brittle.** sample-45 cos is stable (0.033) across forward tol 1e-7…1e-11 — a *systematic*
   formulation error, not a precision-sensitive active-set flip.
-- **The formulation.** The DIRECT backward builds an **active-set-only KKT** (inactive inequality rows
-  zeroed, `-eps_reg` on their diagonal): a constraint is fully pinned or dropped, **ignoring the
-  multiplier magnitude**. At a **weakly-active** constraint (active `s≈0` but tiny multiplier `y≈0.04` —
-  strict comp holds, barely) it pins the control fully, but the true sensitivity lets it move a little.
-  The barrier's smooth complementarity weight `W = y/(s + y/κ)` scales with `y`, so it treats `y=0.04` as
-  weakly binding and gets the gradient right. So the ~4% imprecision is a fundamental limitation of
-  **binary active-set differentiation at weakly-active constraints**, cured by smooth (barrier) weighting.
+- **It is a DIRECT-backward implementation bug, not a conceptual limitation.** All regularity conditions
+  hold (strict comp, LICQ, SOSC) and the forward converged. Under exactly those conditions the barrier/IPM
+  sensitivity provably converges to the active-set (IFT) sensitivity as κ→0 (Frey/Diehl Thm 2–3), and we
+  measured it converged and stable (cos 1.0 from κ=1e-6 to 1e-10). So the true hard-box active-set
+  sensitivity **is well-defined and equals cos 1.0** — and the DIRECT backward returning 0.033 means it
+  **computes that sensitivity incorrectly** on the ~4% of samples with a control at the bound. (NB: the
+  multiplier *magnitude* does not enter `dx/dθ` — only the active constraint Jacobians do — and the
+  barrier, being interior, has no active set; so the bug is in the hard-box `DIRECT` KKT assembly, not a
+  binary-vs-smooth distinction. Pinning the exact line needs tracing the active-set assembly /`-eps_reg`
+  vs the primal active set; the barrier sidesteps it entirely.)
 
 Scripts: `closed_loop_gradient_accuracy.py` (main), `fd_diagnose.py` (noise-floor),
 `strict_comp_check.py` (κ/√κ degeneracy), `fwd_conv_check.py` (forward convergence). Data:
