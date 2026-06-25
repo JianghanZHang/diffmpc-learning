@@ -84,9 +84,13 @@ while the hard box does not. Ruled out, in order:
   of it. LICQ always holds for this problem class.
 - **under-converged forward** — REFUTED (`fwd_conv_check.py`): 0/50 steps hit the ADMM cap; it
   converged like the clean samples.
-- **remaining cause: QP ill-conditioning.** Sample 45's forward needed **1942 ADMM iters vs ~400** for
-  clean samples (a near-active constraint, multiplier ≈0.04 — strict comp holds, barely), so the
-  **DIRECT backward's KKT solve loses accuracy** while the barrier regularizes it.
+- **remaining cause: the DIRECT backward is numerically imprecise at a near-active constraint.** Sample
+  45's forward needed **1942 ADMM iters vs ~400** for clean samples (a near-active constraint, multiplier
+  ≈0.04 — strict comp holds, barely). Sweeping the barrier **κ→0** (`kappa_sweep45.py`) confirms the
+  hard gradient is *well-defined*: the barrier gradient on sample 45 stays **cos=1.0000 down to κ=1e-10**
+  (it does NOT degrade toward 0.034). So the limit is not ill-conditioned and the FD is right — it is
+  specifically the `DIRECT_CUDSS_FFI` backward's KKT solve that loses accuracy here, while the barrier
+  (κ≤1e-6) is both tight enough to match the hard gradient and well-conditioned enough to compute it.
 
 **Bottom line: the FD ground truth is correct.** On the only sample where it looked suspicious it
 agrees with the independent log-barrier gradient (cos 1.0); the discrepancy is in the hard-box
