@@ -64,11 +64,19 @@ barely moves the result — consistent with Step 1.
    at tol ≤ `1e-3`; the fliers (down to ~−0.95) are the systematic-but-rare DIRECT-backward failures.
    At the loosest tol (`1e-1`) everything degrades (per-sample median `0.42`) — the known loose-solve bias.
 
-## Open cross-check (not yet measured)
+## Cross-check against the actual benchmark — DONE (confirms the reproduction)
 
-My **per-sample** panel (median 1.0 with low fliers) matches the appearance of the reference figure
-`grad_box_accuracy_scp1_fdref.png`, whereas the benchmark's **code** computes the batch-summed cosine
-(my panel 1, median ~0.1). Either the reference figure is a per-sample plot, or the benchmark's published
-numbers differ from this reproduction. Since my reproduction uses the benchmark's *exact* solver, backends,
-and problem setup, running `run_sweeps_gradient_accuracy.sh` itself should land on panel 1 (~0.1) — worth
-confirming directly rather than inferring.
+Ran `benchmark_turbompc_gradient_accuracy.py` directly (horizon 40, fused/DIRECT, α=1.0, admm 1000,
+fd_eps=1e-5, tol 1e-9, seeds 0–9). The benchmark's own `cos_all` is **median 0.36, mean 0.31, min −0.38,
+max 0.80** — i.e. **low and outlier-dominated, NOT ~1.0.** My reproduction on the same seeds gives median
+**0.32**, per-seed in close agreement (seed 0 0.52/0.46, seed 1 0.55/0.54, seed 7 0.77/0.80); the per-seed
+scatter (seed 4 0.07/0.31, seed 9 0.33/0.04) is the **horizon 40-vs-39** off-by-one (the benchmark builds
+`turbompc_horizon = horizon−1`) reshuffling which samples sit near a boundary.
+
+**So the reference figure `grad_box_accuracy_scp1_fdref.png` (median 1.0 + fliers) is a PER-SAMPLE
+cosine, not the benchmark's `cos_all`.** The `run_sweeps` code computes only batch-summed `cos_Q/cos_R/
+cos_all` (all ≈ 0–0.5, median ~0.36); it never computes a per-sample cosine. The per-sample view (median
+1.0, this experiment's middle panel) is the one that matches the reference figure. The two figures are
+**two metrics on the same gradients** — per-sample (median 1.0) vs batch-summed (median ~0.36) — and the
+batch-summed one is dominated by the ~4–8 near-boundary DIRECT-backward outliers per seed, in the
+benchmark exactly as here.

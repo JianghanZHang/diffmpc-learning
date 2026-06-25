@@ -559,5 +559,9 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   cosine** (`cos(Σ_i g_i)`, its headline metric) is **outlier-dominated → median ~0.07** at tight tol, while
   the **per-sample median is 1.000**; removing the ~4–8/64 outliers per seed sends the batch-sum cos to
   **1.000**. So `cos(Σg)` is governed by whichever sample has the largest wrong ‖g‖, not by typical accuracy
-  — per CLAUDE.md (per-sample, never batch-summed). Open cross-check (not yet run): execute the actual
-  benchmark to confirm it lands on ~0.1 (my reproduction uses its exact solver/backends/setup).
+  — per CLAUDE.md (per-sample, never batch-summed). **Cross-check DONE: ran the actual benchmark — its own
+  `cos_all` is median ~0.36 (mean 0.31, min −0.38), low/outlier-dominated, NOT ~1.0**; my reproduction
+  matches it per-seed (median 0.32 on seeds 0–9; per-seed scatter is the horizon 40-vs-39 off-by-one).
+  So the reference figure `grad_box_accuracy_scp1_fdref.png` (median 1.0) is a **per-sample** cosine, which
+  `run_sweeps` never computes — the two figures are the same gradients under two metrics (per-sample 1.0 vs
+  batch-summed 0.36), not a contradiction. (My earlier assumption that the benchmark outputs ~1.0 was wrong.)
