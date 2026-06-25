@@ -43,10 +43,13 @@ B-slack)=1.0000). Script: `closed_loop_gradient_accuracy.py`.
      vanishes once no control is active.
 
    **Mechanism:** a control on the bound is *pinned* in the hard box (`du/dθ=0`) but *soft* in the slack
-   box (`du/dθ ≈ −(dy/dθ)/γ ≠ 0`). This per-step O(1/γ)≈1e-4 gradient mismatch, present only at active
-   controls, **accumulates through the closed-loop rollout**: γ=1e4 over 50 steps compounds to cos 0.2.
-   So γ=1e4 is too soft to get an accurate *gradient* over a 50-step horizon, even though the *solution*
-   stays within ~1e-4 — fixed by larger γ, a shorter horizon, or a looser box.
+   box (`du/dθ ≈ −(dy/dθ)/γ ≠ 0`). This per-step gradient mismatch, present only at active controls,
+   **accumulates through the closed-loop rollout**: γ=1e4 over 50 steps compounds to cos 0.2. The total
+   relative gradient error is **measured to scale exactly as 1/γ** (`gamma_scaling.py`): rel-err
+   22 → 2.3 → 0.24 → 0.024 → 0.0024 for γ = 1e4…1e8, a clean 10×/decade — the Moreau-relaxation order.
+   So γ=1e4 is too soft to get an accurate *gradient* over a 50-step horizon (you need γ≈1e7 for <1%
+   error), even though the *solution* stays within ~1e-4 — fixed by larger γ, a shorter horizon, or a
+   looser box.
 
 3. **At loose tol (1e-1) everyone is wrong** (even A no-slack = the GT, at 0.14) — a loose solve biases
    every gradient regardless of formulation.
