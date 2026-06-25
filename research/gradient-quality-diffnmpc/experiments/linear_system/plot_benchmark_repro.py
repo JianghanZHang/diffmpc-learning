@@ -6,7 +6,7 @@ VALIDATED FD eps=1e-4. Three panels tell the story:
 
     python research/gradient-quality-diffnmpc/experiments/linear_system/plot_benchmark_repro.py
 """
-import os
+import os, argparse
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -34,9 +34,12 @@ def _box(ax, data, tols, title, ylabel):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--eps", type=float, default=VALID_EPS, help="FD eps to plot (1e-4 validated, 1e-5 benchmark)")
+    args = ap.parse_args()
     Z = np.load(os.path.join(_HERE, "results", "benchmark_repro.npz"))
     tols = list(Z["ad_tols"]); horizon = int(Z["horizon"]); nseeds = len(Z["seeds"])
-    e = VALID_EPS
+    e = args.eps
     # tightest tol on the left
     order = sorted(range(len(tols)), key=lambda i: tols[i])
     tols_o = [tols[i] for i in order]
@@ -54,10 +57,12 @@ def main():
     _box(axes[2], clean_data, tols_o, "batch-summed cos,\nper-sample outliers removed", "")
     for ax in axes:
         ax.set_ylim(-1.05, 1.08)
-    fig.suptitle(f"Benchmark reproduction (horizon {horizon}, {nseeds} seeds, validated FD eps={e:.0e}, "
+    tag = "validated" if e == VALID_EPS else ("benchmark" if abs(e - 1e-5) < 1e-12 else "")
+    fig.suptitle(f"Benchmark reproduction (horizon {horizon}, {nseeds} seeds, FD eps={e:.0e} {tag}, "
                  f"fused fwd / DIRECT bwd, SQP iter=1)", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
-    out = os.path.join(_HERE, "results", "benchmark_repro.png")
+    suffix = "" if e == VALID_EPS else f"_eps{e:.0e}"
+    out = os.path.join(_HERE, "results", f"benchmark_repro{suffix}.png")
     fig.savefig(out, dpi=130, bbox_inches="tight")
     print(f"saved {out}")
 
