@@ -105,6 +105,21 @@ gradient is faithful *in principle* (well-defined — confirmed by the κ→0 sw
 unlike the Moreau slack's 0.2), no horizon-compounding bias, and numerically robust where the hard-box
 DIRECT backward is not.
 
+**Root cause of the DIRECT-backward imprecision — a binary active set vs a weakly-active constraint**
+(`directbwd_rootcause.py`, `directbwd_threshold.py`, code `backward_kkt_jax.py:144`):
+- **Not a solve issue.** `DIRECT_CUDSS_FFI` and `DIRECT_JAX_DENSE` (FFI cuDSS vs pure-JAX x64 dense) give
+  the *identical* wrong cos 0.033 — so it is not cuDSS precision, and not ill-conditioning (those would
+  diverge between solvers). Both accurately solve the *same* KKT, which encodes the wrong gradient.
+- **Not brittle.** sample-45 cos is stable (0.033) across forward tol 1e-7…1e-11 — a *systematic*
+  formulation error, not a precision-sensitive active-set flip.
+- **The formulation.** The DIRECT backward builds an **active-set-only KKT** (inactive inequality rows
+  zeroed, `-eps_reg` on their diagonal): a constraint is fully pinned or dropped, **ignoring the
+  multiplier magnitude**. At a **weakly-active** constraint (active `s≈0` but tiny multiplier `y≈0.04` —
+  strict comp holds, barely) it pins the control fully, but the true sensitivity lets it move a little.
+  The barrier's smooth complementarity weight `W = y/(s + y/κ)` scales with `y`, so it treats `y=0.04` as
+  weakly binding and gets the gradient right. So the ~4% imprecision is a fundamental limitation of
+  **binary active-set differentiation at weakly-active constraints**, cured by smooth (barrier) weighting.
+
 Scripts: `closed_loop_gradient_accuracy.py` (main), `fd_diagnose.py` (noise-floor),
 `strict_comp_check.py` (κ/√κ degeneracy), `fwd_conv_check.py` (forward convergence). Data:
 `results/gradient_accuracy.npz`, `results/strict_comp_check.npz`.
