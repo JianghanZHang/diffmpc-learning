@@ -80,3 +80,27 @@ cos_all` (all ≈ 0–0.5, median ~0.36); it never computes a per-sample cosine.
 **two metrics on the same gradients** — per-sample (median 1.0) vs batch-summed (median ~0.36) — and the
 batch-summed one is dominated by the ~4–8 near-boundary DIRECT-backward outliers per seed, in the
 benchmark exactly as here.
+
+## External-vs-diffmpc2 codebase (re: the reference figure `grad_box_accuracy_scp1_fdref.png`)
+
+**The reference figure plots `cos_all` (batch-summed), not per-sample.** It is produced by
+`external/turbompc/.../plot_results/plot_gradient_accuracy.py` (`plot_cosine_by_scp`, green median), which
+uses `cos_all` only. It shows median ~1.0. Rendering **this** reproduction's `cos_all` through the **same
+external script** (`benchmark_repro_external_style.png`, via `benchmark_repro_tolnpz/`) gives median
+**~0.1** — same metric, same plotting code, different *gradients*. So the gap is a **codebase** difference,
+not a metric or eps one.
+
+The two turbompc packages differ in only 3 source files; **`backward_kkt_jax.py` (the DIRECT KKT assembly)
+is identical**. Candidate causes:
+- **(a) `utils/timing.py` rollout warm-start** (diffmpc2 `jax.lax.stop_gradient(solution)` vs external
+  cold-start `current_solution`) — **REFUTED** (`warmstart_test.py`): `warm_start` True vs False both give
+  `cos_all` ~0.45 with the outliers intact, so the rollout is *not* the cause and was *not* a confound for
+  the earlier DIRECT-backward outlier finding.
+- **(b) `solvers/turbompc_solver.py` inequality-multiplier / active-set handling** (diffmpc2 uses a
+  `cumsum`/`take_along_axis` active-set gather; external a simpler per-row sign-corrected map) — the
+  remaining, **untested** candidate.
+
+**Not independently confirmed:** external's own `cos_all` — its FFI won't build here (CUDA compile errors)
+and pure-JAX is too slow at horizon 40 — so "external ≈ 1.0" rests on the reference figure + the source
+diff, not a local run. What *is* measured: diffmpc2's `cos_all` ≈ 0.1 (outlier-dominated), the per-sample
+median is 1.0, and the rollout warm-start is not the cause.
