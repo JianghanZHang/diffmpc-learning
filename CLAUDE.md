@@ -6,7 +6,22 @@ Guidance for Claude Code working in this **project workspace**
 ## What this workspace is
 
 This is the **"Gradient Quality of Differentiable NMPC"** research project. It *uses* the
-diffmpc2 / TurboMPC solver but is kept separate from it.
+TurboMPC solver but is kept separate from it.
+
+> **⚠️ 2026-06-26 — Use `external/turbompc` (GitHub `main`) as the canonical solver, NOT `diffmpc2/`
+> (`release-cleanup`).** diffmpc2 produces **wrong hard-box backward gradients**: its
+> `turbompc/solvers/turbompc_solver.py` is missing the inequality-multiplier **sign-correction**
+> (`y_ineq = −sign·y_g`, mapping ADMM bound duals → active-constraint multipliers; `sign =
+> lower_active − upper_active`) and the **lower/upper dual-sign disambiguation** that external has.
+> `backward_kkt_jax.py` (the DIRECT KKT assembly) is **identical** between them, so it is fed
+> wrong-signed / mis-classified active multipliers at near-active constraints → outlier gradients
+> (benchmark `cos_all` median **~0.36**, negative cosines). External, same config/seeds/cuDSS 0.7.1 →
+> `cos_all` median **1.0**. **Re-validate every gradient-quality result that used `diffmpc2/` against
+> `external/turbompc`** (the earlier "DIRECT-backward outlier / weakly-active" findings in
+> `gradient_accuracy.md` are this diffmpc2 bug, not fundamental — the rollout warm-start was *refuted*).
+> Measured: `experiments/linear_system/results/benchmark_repro.md`; memory
+> `diffmpc2-hardbox-outliers-are-release-cleanup-specific` (incl. the cuDSS-0.7.1 build recipe — external's
+> `.cu` ship the cuDSS-0.8 API and need the same compat-shim/backport diffmpc2 used).
 
 ```
 diffmpc-learning/
