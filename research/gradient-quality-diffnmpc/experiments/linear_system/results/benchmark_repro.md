@@ -100,7 +100,12 @@ is identical**. Candidate causes:
   `cumsum`/`take_along_axis` active-set gather; external a simpler per-row sign-corrected map) — the
   remaining, **untested** candidate.
 
-**Not independently confirmed:** external's own `cos_all` — its FFI won't build here (CUDA compile errors)
-and pure-JAX is too slow at horizon 40 — so "external ≈ 1.0" rests on the reference figure + the source
-diff, not a local run. What *is* measured: diffmpc2's `cos_all` ≈ 0.1 (outlier-dominated), the per-sample
-median is 1.0, and the rollout warm-start is not the cause.
+**Not independently confirmed:** external's own `cos_all`. Attempts to run external locally all blocked:
+its cuDSS FFI `.cu` targets a cuDSS API the installed cuDSS 0.7.1 lacks (`CUDSS_R_32F`,
+`cudssReorderingAlg_t` undefined — the jaxlib-include build issue was fixable via direct cmake, but this
+cuDSS-version mismatch is not), and `ADMM_FUSED_CUDSS` needs the same unbuildable `libadmm_cudss_ffi.so`;
+the only buildable/pure-JAX backends (dense, PCG) are too slow at horizon 40 (>20 min, 0 seeds), and a
+small horizon where they'd finish has no outliers to compare. So "external ≈ 1.0" rests on the reference
+figure + the source diff, **not a local run**. What *is* measured: diffmpc2's `cos_all` ≈ 0.1
+(outlier-dominated), the per-sample median is 1.0, and the rollout warm-start is not the cause (so the
+remaining suspect for external-vs-diffmpc2 is `turbompc_solver.py`'s multiplier/active-set handling).
