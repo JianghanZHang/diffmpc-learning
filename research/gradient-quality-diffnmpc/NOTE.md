@@ -565,3 +565,31 @@ Adapt MPC parameters online while the controller runs, using gradients from the 
   So the reference figure `grad_box_accuracy_scp1_fdref.png` (median 1.0) is a **per-sample** cosine, which
   `run_sweeps` never computes — the two figures are the same gradients under two metrics (per-sample 1.0 vs
   batch-summed 0.36), not a contradiction. (My earlier assumption that the benchmark outputs ~1.0 was wrong.)
+- **2026-06-26** — **The "diffmpc2 hard-box DIRECT-backward outliers" are a diffmpc2 `release-cleanup`
+  BUG, not fundamental; `external/turbompc` (GitHub main) is correct.** This resolves the benchmark
+  discrepancy and *corrects the 2026-06-25 entry above*: the reference figure is external's **batch-summed
+  `cos_all`**, which on external is median **1.0** (not a "per-sample" metric). **Measured** (built
+  external's cuDSS FFI against the installed cuDSS 0.7.1 via a backport — external's `.cu` ship the
+  cuDSS-0.8 API; rename macros + drop the extra `cudssMatrixCreateCsr` index-type arg): same
+  config/seeds/cuDSS, external hard-box `cos_all` median **1.0** (9/10 seeds exactly 1.0) vs diffmpc2
+  **0.36**. **Cause** (`turbompc/solvers/turbompc_solver.py`; `backward_kkt_jax.py` is byte-identical, so
+  the DIRECT backward is fed wrong *inputs*): diffmpc2 is missing external's inequality-multiplier
+  **sign-correction** (`y_ineq = −sign·y_g`, `sign = lower − upper`) and **lower/upper dual-sign
+  disambiguation** → wrong-signed / mis-classified active multipliers at near-active constraints →
+  wrong-direction gradients. The rollout warm-start (`timing.py` `stop_gradient`) was **refuted** as the
+  cause (`warmstart_test.py`). The project's own log-barrier backward (`src/diffmpc_learning`) is
+  **immune** — it uses one-sided rows (`to_one_sided`: `[G;−G]x≤[u;−l]`, so lower/upper are separate
+  ≥0-multiplier rows) + a smooth complementarity weight `W = y_g/(s + y_g/γ)`, never a two-sided hard
+  active-set. CLAUDE.md (top callout) + HANDOFF.md updated to use `external/turbompc` as canonical;
+  memory `diffmpc2-hardbox-outliers-are-release-cleanup-specific`. **Re-validate prior gradient_accuracy.md
+  results** (the "weakly-active DIRECT-backward outlier" findings are this diffmpc2 bug).
+- **2026-06-26** — **4-variant benchmark on the correct solver** (`experiments/linear_system/
+  four_variant_benchmark.{py,md,png,npz}`; external/turbompc, common hard-box GT, horizon 40, 10 seeds,
+  per-sample **and** batch-summed). At tight tol over 640 samples: **the hard box and the pure log-barrier
+  are FAITHFUL — cos 1.0, ZERO outliers** (the hard box's 0 outliers is the clincher that external is
+  correct — diffmpc2 has ~4–8/seed); **both Moreau-slack variants** (turbompc-Moreau and barrier+Moreau)
+  are **biased ~0.45**, identically and flat across tol — the Moreau-relaxation bias (not a solve issue,
+  not formulation-specific; 116/640 even go cos<0). Per-sample ≈ batch-sum for every variant here
+  (**systematic** bias), unlike diffmpc2's hard box (per-sample 1.0 but batch-sum ~0.1 — **outlier**-driven):
+  the two metrics together separate systematic bias from outlier corruption. **Upshot: the log-barrier
+  (no slack) gives both a smooth forward and a faithful gradient.**
