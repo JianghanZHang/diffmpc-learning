@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-23 · **Repo:** `JianghanZHang/diffmpc-learning` (private) · **Active branch:** `central-path-admm` (8 commits ahead of `main`, **unmerged**)
 
-This is a session-level handoff: what the project is, what this session built, the current state, how to run it, and what's next. For the research log see `NOTE.md`; for the cuDSS/cartpole environment specifics see `CARTPOLE_COUPLING_HANDOFF.md`.
+This is a session-level handoff: what the project is, what this session built, the current state, how to run it, and what's next. For the research log see `notes/NOTE.md`; for the cuDSS/cartpole environment specifics see `notes/CARTPOLE_COUPLING_HANDOFF.md`.
 
 ---
 
@@ -145,7 +145,7 @@ altitude-independent ⇒ cannot be escaped by climbing ⇒ forces an xy detour).
    in the SMOOTHNESS of the weight→cost map / optimization, NOT in fixing a "wrong" hard gradient. Compare
    {V1,V3} × {hard,barrier} on the same grazing task (eval, grad/update stability across switches, κ bias).
 2. **Multi-seed V3@h=24** for error bars (h=24 matches V1; only seed 0 shown so far).
-3. **Write up** the V1-vs-V3 / truncation finding into `NOTE.md` (RQ1/RQ3) + a quadrotor `RESULTS.md`. The
+3. **Write up** the V1-vs-V3 / truncation finding into `notes/NOTE.md` (RQ1/RQ3) + a quadrotor `RESULTS.md`. The
    central message: with the EXACT (sign-corrected, full-Hessian) gradient, the V1-vs-V3 outcome is
    governed by the estimator's effective HORIZON (truncation), NOT by active-set non-smoothness — the
    *opposite* of the linear-drone-era "hard jumps destabilize BPTT" framing.
@@ -159,7 +159,7 @@ complementarity weight `W = y_g/(s + y_g/γ)`, never a two-sided hard active-set
 
 ## 1. Project context
 
-**"Gradient Quality of Differentiable NMPC."** We study the quality of gradients obtained by differentiating through an NMPC solver (the **TurboMPC / diffmpc2** solver — SQP + ADMM, GPU linear solvers, KKT-implicit `custom_vjp` gradients), and how to improve it. The differentiable parameter is the MPC cost-weight vector (diffmpc-as-policy). Four research questions (RQ1 gradient reliability under general inequalities; RQ2 cheaper solves / ADMM-vs-IPM; RQ3 RL paradigm; RQ4 deploy-time tuning) — see `NOTE.md`.
+**"Gradient Quality of Differentiable NMPC."** We study the quality of gradients obtained by differentiating through an NMPC solver (the **TurboMPC / diffmpc2** solver — SQP + ADMM, GPU linear solvers, KKT-implicit `custom_vjp` gradients), and how to improve it. The differentiable parameter is the MPC cost-weight vector (diffmpc-as-policy). Four research questions (RQ1 gradient reliability under general inequalities; RQ2 cheaper solves / ADMM-vs-IPM; RQ3 RL paradigm; RQ4 deploy-time tuning) — see `notes/NOTE.md`.
 
 **The thread this session pursued (RQ1/RQ2):** inequality **active-set changes** make the diffmpc gradient non-smooth/jumpy (strict-complementarity failure → singular KKT). The fix in the literature (Frey/Diehl, `reference_papers/Diehl_DiffNMPC.pdf`, = `[Frey2025]`) is **interior-point central-path smoothing**: relax complementarity `s·z = 0 → s·z = τ_min`, giving a C¹ solution map with O(τ) bias. The sibling project `external/PrismQP/` does the *same* smoothing but with **ADMM instead of Newton**, via a log-barrier **retraction** in the slack/dual update. **This session built and verified that same central-path/retraction ADMM for the OCP-structured (TurboMPC) setting**, as the foundation for getting smooth gradients through inequality-constrained NMPC.
 
@@ -171,9 +171,9 @@ complementarity weight `W = y_g/(s + y_g/γ)`, never a two-sided hard active-set
 ├── src/diffmpc_learning/       ← NEW: the project's solver package (see §3)
 ├── tests/{python,cuda}/        ← NEW: package tests (11 pass)
 ├── 
-│   ├── NOTE.md, REFERENCES.md          ← research log + cited bibliography
-│   ├── SLACK_PENALTY_ADMM.md           ← NEW: ADMM slack-penalty derivation note
-│   ├── CARTPOLE_COUPLING_HANDOFF.md    ← cuDSS/cartpole env + earlier findings
+│   ├── notes/NOTE.md, notes/REFERENCES.md          ← research log + cited bibliography
+│   ├── notes/SLACK_PENALTY_ADMM.md           ← NEW: ADMM slack-penalty derivation note
+│   ├── notes/CARTPOLE_COUPLING_HANDOFF.md    ← cuDSS/cartpole env + earlier findings
 │   ├── plans/                          ← NEW: the two implementation plans executed this session
 │   └── experiments/{cartpole,quadrotor}/  ← benchmarks + results
 ├── diffmpc2/                   ← the TurboMPC solver (GITIGNORED — vendored dependency; see §6 gotcha)
@@ -186,8 +186,8 @@ complementarity weight `W = y_g/(s + y_g/γ)`, never a two-sided hard active-set
 ## 2. What this session did (overview)
 
 1. **Workspace consolidation & repo init.** Removed the `diffmpc2-gradckpt` git worktree; consolidated the solver to a single `diffmpc2/` on `release-cleanup` (carries the backward-Hessian fix `cccba81`). Repaired the cartpole benchmark (path → `diffmpc2/`, optional-cuDSS-import). Created the **private** GitHub repo `JianghanZHang/diffmpc-learning` and pushed `main`.
-2. **Research-log update.** Folded the 2026-06-18 cartpole/quadrotor coupling findings into `NOTE.md`: per-sample convergence-checked-FD methodology, the **backward dynamics-Hessian magnitude bug** (`dt·λᵀ∇²f` Euler hardcode) found via an **acados exact-Hessian cross-check** and fixed in `cccba81` (rel-ℓ₂ ~0.16→~5e-5), and the nonconvex-discontinuity diagnosis.
-3. **Theory grounding.** Read `[Frey2025]` and PrismQP; wrote `SLACK_PENALTY_ADMM.md` (how TurboMPC's quadratic slack relates to the log-barrier; the indicator → Moreau-envelope → log-barrier picture; closed-form elastic retraction `s = b_Γ(r)`, `Γ = κ(1/ρ+1/γ)`, `ξ = κ/(γs)`).
+2. **Research-log update.** Folded the 2026-06-18 cartpole/quadrotor coupling findings into `notes/NOTE.md`: per-sample convergence-checked-FD methodology, the **backward dynamics-Hessian magnitude bug** (`dt·λᵀ∇²f` Euler hardcode) found via an **acados exact-Hessian cross-check** and fixed in `cccba81` (rel-ℓ₂ ~0.16→~5e-5), and the nonconvex-discontinuity diagnosis.
+3. **Theory grounding.** Read `[Frey2025]` and PrismQP; wrote `notes/SLACK_PENALTY_ADMM.md` (how TurboMPC's quadratic slack relates to the log-barrier; the indicator → Moreau-envelope → log-barrier picture; closed-form elastic retraction `s = b_Γ(r)`, `Γ = κ(1/ρ+1/γ)`, `ξ = κ/(γs)`).
 4. **Central-path forward solve** (plan: `plans/2026-06-22-central-path-admm-forward.md`, executed subagent-driven). Verified the new barrier/retraction ADMM matches the current TurboMPC solver as `κ→0`.
 5. **Packaging.** Migrated the prototype into a proper `src/diffmpc_learning/` package (TurboMPC convention, CUDA-ready).
 6. **NLP-KKT convergence** (plan: `plans/2026-06-23-nlp-kkt-sqp-central-path.md`). Built an SQP loop using the central-path solver as the inner QP solver; verified it converges the **nonlinear** KKT on the cartpole swing-up, hard and soft.
@@ -264,7 +264,7 @@ python -m pytest tests -v          # all 11
 ```
 Requirements: **GPU (RTX 5090, sm_120), x64** (set in the modules), and the cuDSS FFI `.so` at `diffmpc2/build/ffi/`.
 
-**⚠️ Critical gotcha — the cuDSS build depends on an UNCOMMITTED revert in `diffmpc2/`.** Installed cuDSS is **0.7.1.6**, but `diffmpc2/`'s `release-cleanup` ships the cuDSS-**0.8** API (commit `e19a687`, broken on sm_120). The 3 `.cu` files are reverted to the 0.7.1 API as an **uncommitted working-tree change** in `diffmpc2/` (kept uncommitted so the vendored repo stays at origin) and the FFI is rebuilt into `diffmpc2/build/ffi/`. A `git reset --hard` / `checkout` in `diffmpc2/` will wipe this and break cuDSS. To restore (full recipe in `CARTPOLE_COUPLING_HANDOFF.md` §2):
+**⚠️ Critical gotcha — the cuDSS build depends on an UNCOMMITTED revert in `diffmpc2/`.** Installed cuDSS is **0.7.1.6**, but `diffmpc2/`'s `release-cleanup` ships the cuDSS-**0.8** API (commit `e19a687`, broken on sm_120). The 3 `.cu` files are reverted to the 0.7.1 API as an **uncommitted working-tree change** in `diffmpc2/` (kept uncommitted so the vendored repo stays at origin) and the FFI is rebuilt into `diffmpc2/build/ffi/`. A `git reset --hard` / `checkout` in `diffmpc2/` will wipe this and break cuDSS. To restore (full recipe in `notes/CARTPOLE_COUPLING_HANDOFF.md` §2):
 ```bash
 cd diffmpc2 && git checkout e19a687^ -- \
   turbompc/solvers/admm/csrc/admm_cudss.cu \
@@ -282,7 +282,7 @@ cmake -S turbompc/solvers/csrc -B build/ffi -DCMAKE_BUILD_TYPE=Release && cmake 
 - **Two-sided box → one-sided rows.** The closed-form retraction is one-sided, so `to_one_sided` stacks `l ≤ Gx ≤ u` into `[G;−G]x ≤ [u;−l]`; the net two-sided multiplier is `y_g = ν_upper − ν_lower`.
 - **Hard vs soft.** With a finite slack penalty `γ`, the elastic retraction's `κ→0` limit is the **soft** (quadratic-penalty) solution (matches TurboMPC `use_slack=True`); `γ→∞` gives the **hard** box (matches `use_slack=False`). Pick the reference to match.
 - **FD ground truth = convergence-checked, per-sample** (CLAUDE.md rule): shrink eps to a plateau, flag non-plateau samples as discontinuities; never a batch-summed/bare-mean gradient.
-- **No speculation in docs**: cite (`[Key]` → `REFERENCES.md`) or flag as conjecture; report only what was measured.
+- **No speculation in docs**: cite (`[Key]` → `notes/REFERENCES.md`) or flag as conjecture; report only what was measured.
 
 ---
 
@@ -292,4 +292,4 @@ cmake -S turbompc/solvers/csrc -B build/ffi -DCMAKE_BUILD_TYPE=Release && cmake 
 2. **CUDA kernels** — implement the central-path forward (and/or backward) as cuDSS-fused CUDA in `src/diffmpc_learning/solvers/csrc/` (scaffold ready).
 3. **Obstacle (one-sided, nonlinear) constraints** — the elastic retraction is already one-sided per row, so it maps directly to `1 − ‖p−c‖/r ≤ 0`; test gradient smoothness across obstacle activation (the original RQ1 motivation).
 4. **Finish the branch** — merge / PR `central-path-admm` when ready (re-review the migration + SQP commits).
-5. **Fold the NLP-KKT result into `NOTE.md`** (RQ2: ADMM central-path converges the NLP-KKT, matches TurboMPC) — not yet logged there.
+5. **Fold the NLP-KKT result into `notes/NOTE.md`** (RQ2: ADMM central-path converges the NLP-KKT, matches TurboMPC) — not yet logged there.

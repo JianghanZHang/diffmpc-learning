@@ -28,8 +28,8 @@ diffmpc-learning/
 ├── CLAUDE.md                              # this file
 ├── diffmpc2/                             # the SOLVER (vendored dependency — keep pristine)
 └──    # THE PROJECT
-    ├── NOTE.md                           # living research log — start here
-    ├── REFERENCES.md                     # citation-grounded bibliography
+    ├── notes/NOTE.md                           # living research log — start here
+    ├── notes/REFERENCES.md                     # citation-grounded bibliography
     └── experiments/                      # split into gradients/ (gradient-quality) and rl/ (policy learning)
         ├── gradients/                    # gradient-quality experiments (one folder per system: <system>/*.py + results/)
         │   ├── cartpole/                 # cartpole coupling × NLP-tol sweep (results/cartpole_sweep.md)
@@ -47,9 +47,9 @@ diffmpc-learning/
   gradients via implicit differentiation of the KKT system (`jax.custom_vjp`). It is a separate
   git repo (currently on branch `release-cleanup`). **Treat it as stable infrastructure and keep
   it pristine** — do not add project files into it or commit research there.
-- **``** is the active work. Start at `NOTE.md`.
+- **``** is the active work. Start at `notes/NOTE.md`.
 
-## The research questions (see NOTE.md for full treatment)
+## The research questions (see notes/NOTE.md for full treatment)
 
 1. **RQ1** — When are diffmpc2's backward gradients reliable enough to train RL policies,
    *especially with general (nonlinear, state-dependent) inequality constraints* that
@@ -63,7 +63,7 @@ diffmpc-learning/
 ## Working conventions for this project
 
 - **No speculation.** Every nontrivial technical claim in project docs must be cited
-  (`[Key]` → `REFERENCES.md`) or explicitly flagged as a conjecture/hypothesis. Several RQs are
+  (`[Key]` → `notes/REFERENCES.md`) or explicitly flagged as a conjecture/hypothesis. Several RQs are
   *partially* answered — know what is established before claiming novelty.
 - **Report only what you measured — do not infer beyond the experiment.** When analyzing results,
   state only quantities the experiment directly produced. Any *mechanism, cause, or explanation*
@@ -73,7 +73,7 @@ diffmpc-learning/
   inference become the premise of the next.
 - **Ground claims in code.** When describing solver behavior, cite `file:line` (paths relative to
   `diffmpc2/`). The mechanics are precise; don't paraphrase from memory.
-- **Update the note, don't fork it.** `NOTE.md` is a living log with a changelog — append findings;
+- **Update the note, don't fork it.** `notes/NOTE.md` is a living log with a changelog — append findings;
   mark hypotheses confirmed/refuted with evidence.
 - **Run experiments on GPU, slack always on** (standing preference): batch over seeds with `vmap`;
   use a slack problem class for the MPC problems.
@@ -90,7 +90,7 @@ diffmpc-learning/
   Report per-sample (never a batch-summed gradient or bare mean) plus the flagged fraction. The
   usable-eps window is bounded below by the noise floor (GPU non-determinism; keep x64); if no
   plateau exists in `[noise-floor eps, jump-distance eps]`, the sample sits on a discontinuity.
-  Rationale + worked example: `CARTPOLE_COUPLING_HANDOFF.md` §8–9.
+  Rationale + worked example: `notes/CARTPOLE_COUPLING_HANDOFF.md` §8–9.
 
 ## Key solver entry points (in `diffmpc2/`)
 
@@ -129,7 +129,7 @@ python3 experiments/gradients/quadrotor/plot_gradient_quality.py            # ne
 
 ## Pointers
 
-- Project log: `NOTE.md` · bibliography: `…/REFERENCES.md` ·
+- Project log: `notes/NOTE.md` · bibliography: `…/notes/REFERENCES.md` ·
   results: `…/experiments/gradients/quadrotor/results/RESULTS.md` (drone/quadrotor),
   `…/experiments/gradients/cartpole/results/cartpole_sweep.md` (cartpole).
 - Solver: `diffmpc2/README.md`, `diffmpc2/docs/`.

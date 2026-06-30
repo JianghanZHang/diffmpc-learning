@@ -1,6 +1,6 @@
 """Aggregate + plot the gradient-quality sweep produced by gradient_quality_sweep.py.
 
-Reads the sweep CSV and renders five figures (NOTE.md E1.2/E2.1):
+Reads the sweep CSV and renders five figures (notes/NOTE.md E1.2/E2.1):
   1. gradient error (rel-L2 & cosine vs AD-tight) vs requested NLP tolerance, per cell.
   2. gradient error vs ADMM max_iter, per cell.
   3. gradient error vs ACHIEVED convergence_error (both sweeps pooled), per cell.

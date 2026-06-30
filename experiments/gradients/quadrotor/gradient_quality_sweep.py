@@ -1,7 +1,7 @@
 """Gradient-quality sweep on the drone obstacle-avoidance problem.
 
 Experiment E1.2 + E2.1/E2.3 of the "Gradient Quality of Differentiable NMPC"
-project (docs/NOTE.md).
+project (docs/notes/NOTE.md).
 
 We measure how good the diffmpc2 SQP-ADMM *backward* gradient is, as a function of
   (a) how many inequality constraints are active  -- a 2x2 constraint grid, and
