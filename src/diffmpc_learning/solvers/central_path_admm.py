@@ -14,11 +14,12 @@ import jax
 jax.config.update("jax_enable_x64", True)  # x64 required (Global Constraints)
 import jax.numpy as jnp
 
-# --- sys.path shim: resolve `turbompc` from the diffmpc2 checkout ---
-# src/diffmpc_learning/solvers/central_path_admm.py -> 3 dirs up = repo root -> /diffmpc2
+# --- sys.path shim: resolve `turbompc` from the CANONICAL external/turbompc checkout ---
+# (NOT diffmpc2 — see CLAUDE.md: diffmpc2 has the hard-box multiplier-sign bug and lacks
+# get_inequality_lagrangian_hessian). 3 dirs up = repo root -> /external/turbompc.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
-_SOLVER_ROOT = os.path.join(_REPO_ROOT, "diffmpc2")
+_SOLVER_ROOT = os.path.join(_REPO_ROOT, "external", "turbompc")
 if _SOLVER_ROOT not in sys.path:
     sys.path.insert(0, _SOLVER_ROOT)
 

@@ -1,0 +1,68 @@
+{
+  "plan_hard_seed0": {
+    "total_wall_clock_s": 160.61710119247437,
+    "mean_update_time_s": 0.7996666735450694,
+    "n_updates": 150.0,
+    "first_train_loss": 26.59224088743232,
+    "last_train_loss": 0.029469368339886056,
+    "first_eval_cost": 30.15231912592934,
+    "last_eval_cost": 8.253561086391139,
+    "final_min_obstacle_margin": -2.8603812361402228,
+    "final_n_violations": 0.0
+  },
+  "plan_hard_seed1": {
+    "total_wall_clock_s": 159.65529465675354,
+    "mean_update_time_s": 0.6005215644836426,
+    "n_updates": 150.0,
+    "first_train_loss": 33.020811918742595,
+    "last_train_loss": 3.0333441167283697,
+    "first_eval_cost": 30.03904389327046,
+    "last_eval_cost": 9.154910476223701,
+    "final_min_obstacle_margin": -3.273320500220567,
+    "final_n_violations": 1.0
+  },
+  "plan_hard_seed2": {
+    "total_wall_clock_s": 123.55385971069336,
+    "mean_update_time_s": 0.6300100944186217,
+    "n_updates": 150.0,
+    "first_train_loss": 30.427597455848797,
+    "last_train_loss": 0.10832956860849535,
+    "first_eval_cost": 29.641397078397247,
+    "last_eval_cost": 8.479143157120756,
+    "final_min_obstacle_margin": -2.9804857299200775,
+    "final_n_violations": 1.0
+  },
+  "bptt_hard_seed0": {
+    "total_wall_clock_s": 132.33378720283508,
+    "mean_update_time_s": 0.5399403172051347,
+    "n_updates": 150.0,
+    "first_train_loss": 22.937387432448016,
+    "last_train_loss": 7.926350131419037,
+    "first_eval_cost": 29.88150819687076,
+    "last_eval_cost": 8.106781902182439,
+    "final_min_obstacle_margin": -2.6132582871941366,
+    "final_n_violations": 1.0
+  },
+  "bptt_hard_seed1": {
+    "total_wall_clock_s": 146.77170944213867,
+    "mean_update_time_s": 0.6472761535004481,
+    "n_updates": 150.0,
+    "first_train_loss": 26.313254067014867,
+    "last_train_loss": 8.199121241986862,
+    "first_eval_cost": 29.45588726845136,
+    "last_eval_cost": 8.108837987827986,
+    "final_min_obstacle_margin": -2.5928858025940125,
+    "final_n_violations": 1.0
+  },
+  "bptt_hard_seed2": {
+    "total_wall_clock_s": 119.1957893371582,
+    "mean_update_time_s": 0.4402671692355367,
+    "n_updates": 150.0,
+    "first_train_loss": 24.407866868873207,
+    "last_train_loss": 0.1248810497300248,
+    "first_eval_cost": 29.33053971882725,
+    "last_eval_cost": 8.147866456165831,
+    "final_min_obstacle_margin": -2.671651887222679,
+    "final_n_violations": 0.0
+  }
+}

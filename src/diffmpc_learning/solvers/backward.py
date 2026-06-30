@@ -77,8 +77,19 @@ def solve_reduced_relaxed_kkt(D_aug, E, eq_blocks, x_bar):
 
     Reuses TurboMPC's dense ``solve_backward_kkt`` on an empty-inequality homogeneous
     backward QP: cost ``q = -x_bar`` (so the KKT RHS ``-q = x_bar``), the inequality is
-    folded into ``D_aug``. ``x_bar`` is the primal cotangent ``(N+1, n)``. Returns the
-    primal adjoint ``lam_x`` ``(N+1, n)``.
+    folded into ``D_aug``. ``x_bar`` is the primal cotangent ``(N+1, n)``.
+
+    Returns:
+        ``(lam_x, bwd_multipliers)`` where
+
+        * ``lam_x`` ``(N+1, n)`` is the primal adjoint (states + controls stacked).
+        * ``bwd_multipliers`` is the flat 1-D backward equality+inequality dual from
+          ``solve_backward_kkt``, ordered ``[init-cond n0, dynamics N*nx, inequality]``.
+          Because the backward QP is constructed with an empty inequality block,
+          the length is ``n0 + N*nx`` (with ``n0 = eq_blocks.A0.shape[0]``, equal to
+          ``nx`` when ``constrain_initial_control`` is False). The initial-condition
+          slice ``bwd_multipliers[:n0]`` is ``dL/dx0`` — the initial-state cotangent
+          needed for closed-loop BPTT through the central-path solver.
     """
     Np1, n = D_aug.shape[0], D_aug.shape[1]
     N = Np1 - 1
@@ -97,8 +108,8 @@ def solve_reduced_relaxed_kkt(D_aug, E, eq_blocks, x_bar):
         cost=QPCostBlocks(D=D_aug, E=E, q=-x_bar), eq=eq0, ineq=empty_ineq,
     )
     zshape = ZShape(horizon=N, num_states=nx, num_controls=nu)
-    (lam_states, lam_controls), _ = solve_backward_kkt(bwd_qp, zshape)
-    return pack_x(lam_states, lam_controls)
+    (lam_states, lam_controls), bwd_mult = solve_backward_kkt(bwd_qp, zshape)
+    return pack_x(lam_states, lam_controls), bwd_mult
 
 
 # ----------------------------------------------------------------------------- #
@@ -114,7 +125,7 @@ def qp_central_path_cost_vjp(qp1, x_star, duals, x_bar, *, slack_weight):
     _, _, y_g_stacked = duals
     W = relaxed_complementarity_weight(qp1, x_star, y_g_stacked, slack_weight)
     D_aug = augment_D_with_relaxed_ineq(qp1.cost.D, qp1.ineq.G, W)
-    lam_x = solve_reduced_relaxed_kkt(D_aug, qp1.cost.E, qp1.eq, x_bar)
+    lam_x, _ = solve_reduced_relaxed_kkt(D_aug, qp1.cost.E, qp1.eq, x_bar)
 
     # dL/d(D,E,q) = - lam_x . d/d(D,E,q)[ P(D,E) x* + q ]   (only cost depends on theta)
     def cost_stationarity(D, E, q):
@@ -171,24 +182,26 @@ def central_path_nlp_solve(solver, problem_params, weights, *, slack_weight, tar
                             target_kappa=target_kappa, **sqp_kwargs)
 
 
-def central_path_nlp_grad(solver, problem_params, weights, loss_grad_fn, *,
-                          slack_weight, target_kappa, rho_bar=0.1,
-                          cp_max_iter=50000, cp_tol=1.0e-11, **sqp_kwargs):
-    """``dL/dweights`` at the converged NLP solution of the central-path SQP.
+def _relaxed_nlp_backward(solver, problem_params, weights, states_c, controls_c, final_kappa,
+                          dL_dstates, dL_dcontrols, *, slack_weight, rho_bar, cp_max_iter,
+                          cp_tol, include_ineq_hessian):
+    """Relaxed NLP-KKT adjoint at a converged central-path iterate.
 
-    Differentiates the *relaxed* NLP-KKT at the converged primal-dual point:
+    Steps (2)-(4) of the relaxed NLP backward, factored out of ``central_path_nlp_grad``
+    so the same machinery serves both the explicit gradient API and the ``custom_vjp``:
 
-      1. run ``sqp_central_path`` (weighted) to a converged NLP-KKT;
-      2. re-solve the inner QP once at the converged iterate (final kappa) for a
+      2. re-solve the inner QP once at the converged iterate (``final_kappa``) for a
          consistent ``(x*, duals)``;
       3. backward Hessian = exact Lagrangian Hessian (``D + lambda^T nabla^2 f`` via
          ``get_dynamics_lagrangian_hessian``) ``+ G1^T diag(W) G1`` (relaxed inequality);
-      4. solve the reduced KKT for ``lam_x``; weight gradient
-         ``dL/dw = - d/dw [ sum grad_cost(x*; w) . lam_x ]`` (cost-only mixed partial).
+      4. solve the reduced KKT for ``(lam_x, bwd_mult)``; weight gradient
+         ``dL/dw = - d/dw [ sum grad_cost(x*; w) . lam_x ]`` (cost-only mixed partial),
+         and the initial-state cotangent ``dL/dx0 = bwd_mult[:nx]`` (the init-condition
+         adjoint dual) for closed-loop BPTT.
 
-    ``loss_grad_fn(states, controls) -> (dL_dstates, dL_dcontrols)``. Returns
-    ``(res, dL_dweights, info)`` where ``res`` is the forward dict and ``info`` the
-    re-solve diagnostics.
+    ``(dL_dstates, dL_dcontrols)`` is the primal cotangent ``dL/d(states, controls)``.
+    Returns ``(dL_dweights, dL_dx_init, info)`` where ``info`` carries the inner-solve
+    diagnostics (with ``dL_dx_init`` added under that key).
     """
     program = solver.program
     nx = program.num_state_variables
@@ -196,10 +209,6 @@ def central_path_nlp_grad(solver, problem_params, weights, loss_grad_fn, *,
     N = program.horizon
 
     pp_w = solver.make_params_with_weights(weights, problem_params)
-    res = sqp_central_path(solver, pp_w, slack_weight=slack_weight, target_kappa=target_kappa,
-                           rho_bar=rho_bar, cp_max_iter=cp_max_iter, cp_tol=cp_tol, **sqp_kwargs)
-    states_c, controls_c = res["states"], res["controls"]
-    final_kappa = float(res["kappas"][-1])
 
     # (2) consistent primal-dual at the converged linearization.
     schur = make_schur_solver(SchurSolverBackend.CUDSS_FFI, N, nx, nu, pcg_params=_PCG)
@@ -210,16 +219,24 @@ def central_path_nlp_grad(solver, problem_params, weights, loss_grad_fn, *,
         rho_bar=rho_bar, max_iter=cp_max_iter, tol=cp_tol)
     _, y_f_dyn, y_g_stacked = duals
 
-    # (3) exact Lagrangian Hessian + relaxed inequality fold.
+    # (3) exact Lagrangian Hessian (dynamics + inequality curvature) + relaxed inequality fold.
     dyn_hess = program.get_dynamics_lagrangian_hessian(states_c, controls_c, pp_w, y_f_dyn)
     D_full = qp1.cost.D + dyn_hess
+    # Inequality-constraint curvature sum_i mu_i grad^2 g_i (turbompc method, mirrors the
+    # dynamics-Hessian call above). mu = net two-sided multiplier nu_u - nu_l (sqp.py:150
+    # convention) from the one-sided stacked dual. Zero for linear rows (grad^2 g = 0);
+    # nonzero only for nonlinear constraints (e.g. obstacle).
+    if include_ineq_hessian:
+        m = qp.ineq.G.shape[1]
+        y_g_net = y_g_stacked[:, :m] - y_g_stacked[:, m:]
+        ineq_hess = program.get_inequality_lagrangian_hessian(states_c, controls_c, pp_w, y_g_net)
+        D_full = D_full + ineq_hess
     W = relaxed_complementarity_weight(qp1, x_star, y_g_stacked, slack_weight)
     D_aug = augment_D_with_relaxed_ineq(D_full, qp1.ineq.G, W)
 
-    # (4) adjoint solve + cost-only weight gradient.
-    dL_dstates, dL_dcontrols = loss_grad_fn(states_c, controls_c)
+    # (4) adjoint solve + cost-only weight gradient + initial-state cotangent.
     x_bar = pack_x(dL_dstates, dL_dcontrols)
-    lam_x = solve_reduced_relaxed_kkt(D_aug, qp1.cost.E, qp1.eq, x_bar)
+    lam_x, bwd_mult = solve_reduced_relaxed_kkt(D_aug, qp1.cost.E, qp1.eq, x_bar)
     lam_states, lam_controls = lam_x[:, :nx], lam_x[:, nx:]
 
     def contracted(w):
@@ -229,4 +246,110 @@ def central_path_nlp_grad(solver, problem_params, weights, loss_grad_fn, *,
         return jnp.sum(fx * lam_states) + jnp.sum(fu * lam_controls)
 
     dL_dweights = jax.tree_util.tree_map(lambda g: -g, jax.grad(contracted)(weights))
+
+    # dL/dx0 = init-condition adjoint dual (bwd_mult[:nx]; n0 == nx here). Sign is the
+    # SAME positive convention turbompc uses (turbompc_solver.py:766 dL_dx_init = y_f_0_lin[:nx]),
+    # verified by finite differences (test_central_path_x0_sensitivity.py). Rescale by
+    # 1/state_diff only under variable rescaling (mirrors _build_problem_params_cotangent).
+    dL_dx_init = bwd_mult[:nx]
+    if program.rescale_optimization_variables:
+        _, _, _, _, state_diff, _ = program._get_rescaling_params(pp_w)
+        dL_dx_init = dL_dx_init / state_diff
+
+    info = dict(info)
+    info["dL_dx_init"] = dL_dx_init
+    return dL_dweights, dL_dx_init, info
+
+
+def central_path_nlp_grad(solver, problem_params, weights, loss_grad_fn, *,
+                          slack_weight, target_kappa, rho_bar=0.1,
+                          cp_max_iter=50000, cp_tol=1.0e-11, include_ineq_hessian=True,
+                          **sqp_kwargs):
+    """``dL/dweights`` at the converged NLP solution of the central-path SQP.
+
+    Differentiates the *relaxed* NLP-KKT at the converged primal-dual point:
+
+      1. run ``sqp_central_path`` (weighted) to a converged NLP-KKT;
+      2-4. ``_relaxed_nlp_backward``: re-solve the inner QP at the converged iterate,
+           build the exact Lagrangian + relaxed-inequality Hessian, solve the reduced
+           KKT and contract for the cost-only weight gradient.
+
+    ``loss_grad_fn(states, controls) -> (dL_dstates, dL_dcontrols)``. Returns
+    ``(res, dL_dweights, info)`` where ``res`` is the forward dict and ``info`` the
+    re-solve diagnostics (now also carrying ``dL_dx_init``; non-breaking).
+    """
+    pp_w = solver.make_params_with_weights(weights, problem_params)
+    res = sqp_central_path(solver, pp_w, slack_weight=slack_weight, target_kappa=target_kappa,
+                           rho_bar=rho_bar, cp_max_iter=cp_max_iter, cp_tol=cp_tol, **sqp_kwargs)
+    states_c, controls_c = res["states"], res["controls"]
+    final_kappa = float(res["kappas"][-1])
+
+    dL_dstates, dL_dcontrols = loss_grad_fn(states_c, controls_c)
+    dL_dweights, _dL_dx_init, info = _relaxed_nlp_backward(
+        solver, problem_params, weights, states_c, controls_c, final_kappa,
+        dL_dstates, dL_dcontrols, slack_weight=slack_weight, rho_bar=rho_bar,
+        cp_max_iter=cp_max_iter, cp_tol=cp_tol, include_ineq_hessian=include_ineq_hessian)
     return res, dL_dweights, info
+
+
+def _build_problem_params_cotangent(solver, problem_params, dL_dx_init):
+    """Zeros-everywhere ``problem_params`` cotangent tree with ``initial_state`` set.
+
+    Mirrors turbompc's ``_build_problem_params_cotangent`` (turbompc_solver.py:989): a
+    ``tree_map`` over ``problem_params`` that zeros array/float leaves and drops
+    int/other leaves to ``None`` (so the pytree structure round-trips through
+    ``jax.custom_vjp`` with non-differentiable leaves), then sets ``initial_state`` to
+    ``dL_dx_init``. ``dL_dx_init`` is already rescaled in ``_relaxed_nlp_backward``.
+    """
+    def _zero_cotangent(x):
+        if hasattr(x, "shape") and hasattr(x, "dtype"):
+            return jnp.zeros_like(x)
+        if isinstance(x, float):
+            return jnp.asarray(0.0, dtype=jnp.float64)
+        return None
+
+    cotangent = jax.tree_util.tree_map(_zero_cotangent, problem_params)
+    cotangent["initial_state"] = dL_dx_init
+    return cotangent
+
+
+def make_central_path_diff(solver, *, slack_weight, target_kappa, include_ineq_hessian=True,
+                           rho_bar=0.1, cp_max_iter=50000, cp_tol=1.0e-11, **sqp_kwargs):
+    """Factory: a ``jax.custom_vjp`` ``solve(problem_params, weights) -> (states, controls)``.
+
+    Differentiable w.r.t. the cost ``weights`` AND ``problem_params['initial_state']`` (the
+    ``dL/dx0`` needed for closed-loop SHAC-style BPTT through ``du*_0/dx0``). The forward is
+    the eager ``central_path_nlp_solve`` (an SQP Python loop — it runs concretely inside the
+    ``custom_vjp`` ``fwd``); the backward is ``_relaxed_nlp_backward`` (relaxed NLP-KKT adjoint).
+    Mirrors turbompc's differentiable-solve pattern (turbompc_solver.py:1019).
+    """
+    @jax.custom_vjp
+    def solve(problem_params, weights):
+        res = central_path_nlp_solve(
+            solver, problem_params, weights, slack_weight=slack_weight,
+            target_kappa=target_kappa, rho_bar=rho_bar, cp_max_iter=cp_max_iter,
+            cp_tol=cp_tol, **sqp_kwargs)
+        return res["states"], res["controls"]
+
+    def solve_fwd(problem_params, weights):
+        res = central_path_nlp_solve(
+            solver, problem_params, weights, slack_weight=slack_weight,
+            target_kappa=target_kappa, rho_bar=rho_bar, cp_max_iter=cp_max_iter,
+            cp_tol=cp_tol, **sqp_kwargs)
+        residual = (res["states"], res["controls"], float(res["kappas"][-1]),
+                    problem_params, weights)
+        return (res["states"], res["controls"]), residual
+
+    def solve_bwd(residual, cot):
+        d_states, d_controls = cot
+        states_c, controls_c, final_kappa, problem_params, weights = residual
+        dL_dweights, dL_dx_init, _info = _relaxed_nlp_backward(
+            solver, problem_params, weights, states_c, controls_c, final_kappa,
+            d_states, d_controls, slack_weight=slack_weight, rho_bar=rho_bar,
+            cp_max_iter=cp_max_iter, cp_tol=cp_tol, include_ineq_hessian=include_ineq_hessian)
+        problem_params_cotangent = _build_problem_params_cotangent(
+            solver, problem_params, dL_dx_init)
+        return (problem_params_cotangent, dL_dweights)
+
+    solve.defvjp(solve_fwd, solve_bwd)
+    return solve

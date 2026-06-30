@@ -19,7 +19,7 @@ TurboMPC solver but is kept separate from it.
 > `cos_all` median **1.0**. **Re-validate every gradient-quality result that used `diffmpc2/` against
 > `external/turbompc`** (the earlier "DIRECT-backward outlier / weakly-active" findings in
 > `gradient_accuracy.md` are this diffmpc2 bug, not fundamental — the rollout warm-start was *refuted*).
-> Measured: `experiments/linear_system/results/benchmark_repro.md`; memory
+> Measured: `experiments/gradients/linear_system/results/benchmark_repro.md`; memory
 > `diffmpc2-hardbox-outliers-are-release-cleanup-specific` (incl. the cuDSS-0.7.1 build recipe — external's
 > `.cu` ship the cuDSS-0.8 API and need the same compat-shim/backport diffmpc2 used).
 
@@ -27,23 +27,27 @@ TurboMPC solver but is kept separate from it.
 diffmpc-learning/
 ├── CLAUDE.md                              # this file
 ├── diffmpc2/                             # the SOLVER (vendored dependency — keep pristine)
-└── research/gradient-quality-diffnmpc/   # THE PROJECT
+└──    # THE PROJECT
     ├── NOTE.md                           # living research log — start here
     ├── REFERENCES.md                     # citation-grounded bibliography
-    └── experiments/                      # one folder per system: <system>/*.py + <system>/results/
-        ├── cartpole/                     # cartpole coupling × NLP-tol sweep
-        │   └── results/cartpole_sweep.md # per-(K,tol) gradient-accuracy tables
-        └── quadrotor/                    # drone/quadrotor obstacle-avoidance sweep
-            ├── gradient_quality_sweep.py # experiment driver
-            ├── plot_gradient_quality.py  # plots + summary
-            └── results/                  # RESULTS.md + CSVs + figures
+    └── experiments/                      # split into gradients/ (gradient-quality) and rl/ (policy learning)
+        ├── gradients/                    # gradient-quality experiments (one folder per system: <system>/*.py + results/)
+        │   ├── cartpole/                 # cartpole coupling × NLP-tol sweep (results/cartpole_sweep.md)
+        │   ├── linear_system/            # 4-variant gradient-accuracy benchmark
+        │   ├── active_set_smoothing/     # Diehl Example-1 + corridor surrogate (jump-vs-C¹)
+        │   └── quadrotor/                # drone/quadrotor obstacle-avoidance sweep
+        │       ├── gradient_quality_sweep.py # experiment driver
+        │       ├── plot_gradient_quality.py  # plots + summary
+        │       └── results/              # RESULTS.md + CSVs + figures
+        └── rl/                           # diffmpc-as-policy / RL experiments
+            └── drone_rl/                 # Diff-WMPC 2×2 (gradient-mode × hard/barrier) on drone obstacle avoidance
 ```
 
 - **`diffmpc2/`** is the released solver (arXiv:2510.06179): SQP + ADMM, GPU linear solvers,
   gradients via implicit differentiation of the KKT system (`jax.custom_vjp`). It is a separate
   git repo (currently on branch `release-cleanup`). **Treat it as stable infrastructure and keep
   it pristine** — do not add project files into it or commit research there.
-- **`research/gradient-quality-diffnmpc/`** is the active work. Start at `NOTE.md`.
+- **``** is the active work. Start at `NOTE.md`.
 
 ## The research questions (see NOTE.md for full treatment)
 
@@ -86,7 +90,7 @@ diffmpc-learning/
   Report per-sample (never a batch-summed gradient or bare mean) plus the flagged fraction. The
   usable-eps window is bounded below by the noise floor (GPU non-determinism; keep x64); if no
   plateau exists in `[noise-floor eps, jump-distance eps]`, the sample sits on a discontinuity.
-  Rationale + worked example: `research/gradient-quality-diffnmpc/CARTPOLE_COUPLING_HANDOFF.md` §8–9.
+  Rationale + worked example: `CARTPOLE_COUPLING_HANDOFF.md` §8–9.
 
 ## Key solver entry points (in `diffmpc2/`)
 
@@ -109,13 +113,13 @@ diffmpc-learning/
 
 ```bash
 # from this workspace root (diffmpc-learning/); needs the diffmpc2 deps + a GPU
-# drone/quadrotor obstacle-avoidance gradient-quality sweep (experiments/quadrotor/):
-python3 research/gradient-quality-diffnmpc/experiments/quadrotor/gradient_quality_sweep.py --smoke   # ~90s, C1 only
-python3 research/gradient-quality-diffnmpc/experiments/quadrotor/gradient_quality_sweep.py --seeds 4 # full, ~25 min
-python3 research/gradient-quality-diffnmpc/experiments/quadrotor/plot_gradient_quality.py            # newest CSV -> PNG
+# drone/quadrotor obstacle-avoidance gradient-quality sweep (experiments/gradients/quadrotor/):
+python3 experiments/gradients/quadrotor/gradient_quality_sweep.py --smoke   # ~90s, C1 only
+python3 experiments/gradients/quadrotor/gradient_quality_sweep.py --seeds 4 # full, ~25 min
+python3 experiments/gradients/quadrotor/plot_gradient_quality.py            # newest CSV -> PNG
 ```
 
-- The scripts resolve `diffmpc2/` as a sibling (`../../../../diffmpc2` from `experiments/quadrotor/`)
+- The scripts resolve `diffmpc2/` as a sibling (`../../../../../diffmpc2` from `experiments/gradients/quadrotor/`)
   and put it on `sys.path` ahead of site-packages — needed because a *different* `diffmpc` v1.0.0 is
   pip-installed at `/home/jianghan/Workspace/diffmpc2` and would otherwise shadow it.
 - Pure-JAX backends (`ADMM_JAX_LOOP_PCG` fwd, `DIRECT_JAX_DENSE` bwd) run on GPU without the FFI
@@ -125,7 +129,7 @@ python3 research/gradient-quality-diffnmpc/experiments/quadrotor/plot_gradient_q
 
 ## Pointers
 
-- Project log: `research/gradient-quality-diffnmpc/NOTE.md` · bibliography: `…/REFERENCES.md` ·
-  results: `…/experiments/quadrotor/results/RESULTS.md` (drone/quadrotor),
-  `…/experiments/cartpole/results/cartpole_sweep.md` (cartpole).
+- Project log: `NOTE.md` · bibliography: `…/REFERENCES.md` ·
+  results: `…/experiments/gradients/quadrotor/results/RESULTS.md` (drone/quadrotor),
+  `…/experiments/gradients/cartpole/results/cartpole_sweep.md` (cartpole).
 - Solver: `diffmpc2/README.md`, `diffmpc2/docs/`.
