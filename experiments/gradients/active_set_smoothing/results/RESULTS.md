@@ -8,7 +8,7 @@ active at `|θ| = 1`, where strict complementarity fails and `dx*/dθ` **jumps 2
 (`μ·s = τ`, realized as a log-barrier solved by Newton; AD through the solve = the diffmpc gradient)
 gives a C¹ map; `τ → 0` recovers the hard clip.
 
-## Measured (figure: `paper_example1.png`)
+## Measured (figure: `plot/paper_example1.png`)
 
 | metric | hard | smoothed τ=1e-2 | τ=1e-3 | τ=1e-4 |
 |---|---:|---:|---:|---:|
@@ -50,7 +50,7 @@ Phase-2 linear-dynamics + obstacle surrogate.
 diffmpc-as-policy parameter); the loss is the downstream task cost `L(wq)=Σ‖p_t−goal‖²`. Linear walls ⇒
 `∇²g=0` ⇒ the existing central-path backward is exact, so this validates the sweep/activation/κ-tradeoff
 **harness** before implementing the obstacle's curvature term. CPU-only (JAX_DENSE Schur). Fine sweep:
-`wq∈[0.18,0.42]`, 70 pts; figure `corridor_surrogate.png`, data `corridor_surrogate.npz`.
+`wq∈[0.18,0.42]`, 70 pts; figure `plot/corridor_surrogate.png`, data `data/corridor_surrogate.npz`.
 
 ## Measured (numbers from the npz; coupled activation at `wq≈0.2565`)
 

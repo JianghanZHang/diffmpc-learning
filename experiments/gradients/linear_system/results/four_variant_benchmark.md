@@ -6,7 +6,7 @@ truth** — the convergence-checked FD of the *true hard-constrained* (`|u|≤u_
 **Solver = `external/turbompc`** (the verified-correct one — diffmpc2 release-cleanup has the
 inequality-multiplier sign bug). Setup: horizon 40, batch 64, **10 seeds** (640 per-sample points),
 sim_steps 50, umax 1, SQP iter = 1. Reports **both** per-sample cos and batch-summed `cos_all`
-(Σ-over-batch per seed). Script: `four_variant_benchmark.py`; figure `four_variant_benchmark.png`
+(Σ-over-batch per seed). Script: `four_variant_benchmark.py`; figure `plot/four_variant_benchmark.png`
 (per-sample box + batch-sum-median red diamond).
 
 ## Result — cos(variant AD, common hard-box GT), 10 seeds (GT non-converged = 0/640)

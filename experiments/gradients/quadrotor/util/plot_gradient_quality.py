@@ -7,8 +7,9 @@ Reads the sweep CSV and renders five figures (notes/NOTE.md E1.2/E2.1):
   4. gradient error vs #active constraints (the activity ladder) -- the headline RQ1 plot.
   5. cos(AD-tight, FD-tight) per cell -- does the *converged* implicit gradient match FD?
 
-Usage:
-    python examples/drone_obstacles/plot_gradient_quality.py <csv>   # or newest if omitted
+Usage (from the workspace root):
+    python experiments/gradients/quadrotor/util/plot_gradient_quality.py <csv>
+    # or newest CSV in results/data/ if omitted
 """
 from __future__ import annotations
 
@@ -23,6 +24,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+# ---- sys.path bootstrap (this file lives in quadrotor/util/) ----
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))  # quadrotor/ package dir
+from util.plot import DATA_DIR, save_fig  # noqa: E402
+
 CELL_ORDER = ["C1_loose_off", "C2_tight_off", "C3_loose_on", "C4_tight_on"]
 CELL_COLOR = {
     "C1_loose_off": "tab:green",
@@ -33,10 +39,9 @@ CELL_COLOR = {
 
 
 def _newest_csv() -> str:
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
-    csvs = sorted(glob.glob(os.path.join(out_dir, "grad_quality_*.csv")))
+    csvs = sorted(glob.glob(os.path.join(DATA_DIR, "grad_quality_*.csv")))
     if not csvs:
-        raise SystemExit(f"No CSV found in {out_dir}. Run gradient_quality_sweep.py first.")
+        raise SystemExit(f"No CSV found in {DATA_DIR}. Run gradient_quality_sweep.py first.")
     return csvs[-1]
 
 
@@ -127,9 +132,7 @@ def main():
 
     fig.suptitle(f"Gradient quality on drone obstacle avoidance — {os.path.basename(csv_path)}", fontsize=13)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
-    png = csv_path.replace(".csv", ".png")
-    fig.savefig(png, dpi=130)
-    print(f"figure -> {png}")
+    save_fig(fig, os.path.splitext(os.path.basename(csv_path))[0] + ".png", dpi=130)
 
     # --- text summary ---
     print("\n=== summary (mean over seeds) ===")

@@ -144,8 +144,9 @@ def run(n_samples, seed, use_slack, sqp_iter, x0_scale=1.0, umax=UMAX):
     for i in order[:8]:
         print(f"    sample {i:3d}: cos={cos[i]:+.5f} rel={rel[i]:.2e} flagged={bool(flagged[i])}")
     out = int(((cos < 0.99) | flagged).sum())
-    os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
-    np.savez(os.path.join(_HERE, "results", f"closed_loop_cartpole_{'slack' if use_slack else 'hardbox'}.npz"),
+    _data_dir = os.path.join(_HERE, "results", "data")
+    os.makedirs(_data_dir, exist_ok=True)
+    np.savez(os.path.join(_data_dir, f"closed_loop_cartpole_{'slack' if use_slack else 'hardbox'}.npz"),
              cos=cos, rel=rel, flagged=flagged, gAD=gAD, gFD=gFD)
     print(f"  outliers (cos<0.99 or flagged): {out}/{n_samples}")
     return cos, rel, flagged

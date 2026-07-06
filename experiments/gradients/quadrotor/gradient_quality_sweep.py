@@ -15,8 +15,8 @@ on, `slack_penalization_weight` (scalar). Objective J(weights) = sum(states^2)+s
 for a single open-loop OCP solve. Seeds (initial states) are batched with vmap on GPU.
 
 Run from the repo root:
-    python examples/drone_obstacles/gradient_quality_sweep.py --smoke
-    python examples/drone_obstacles/gradient_quality_sweep.py            # full sweep
+    python experiments/gradients/quadrotor/gradient_quality_sweep.py --smoke
+    python experiments/gradients/quadrotor/gradient_quality_sweep.py            # full sweep
 """
 from __future__ import annotations
 
@@ -38,27 +38,28 @@ jax_config.update("jax_threefry_partitionable", True)
 import jax
 import jax.numpy as jnp
 
-# This project lives next to the diffmpc2 solver checkout
-# (diffmpc-learning/research/.../experiments  and  diffmpc-learning/diffmpc2). Put the diffmpc2
-# repo root ahead of site-packages so `import diffmpc` resolves to that checkout (a different
-# diffmpc v1.0.0 may be pip-installed and would otherwise shadow it), and the drone-example dir
-# for sibling imports (timing_drone, benchmark_drone_params).
-_HERE = os.path.dirname(os.path.abspath(__file__))                     # .../experiments/quadrotor
+# This project lives next to the turbompc solver checkout (external/diffmpc2, canonical
+# TurboMPC package -- see CLAUDE.md "Use external/turbompc ... as the canonical solver").
+# Put the checkout root ahead of site-packages so `import turbompc` resolves there, and its
+# examples/ dir on sys.path for the sibling drone_utils module (make_drone_config, OBS_CENTERS,
+# OBS_RADII, DRONE_NU, generate_drone_x0 -- consolidated there from the old
+# timing_drone.py/benchmark_drone_params.py pair).
+_HERE = os.path.dirname(os.path.abspath(__file__))                     # .../experiments/gradients/quadrotor
 _DIFFMPC2 = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "external", "diffmpc2"))
-_DRONE = os.path.join(_DIFFMPC2, "examples", "drone_obstacles")
+_DRONE = os.path.join(_DIFFMPC2, "examples")
 for _p in (_DIFFMPC2, _DRONE):
     if _p in sys.path:
         sys.path.remove(_p)
     sys.path.insert(0, _p)
-import benchmark_drone_params as P  # noqa: E402
-from timing_drone import make_drone_config  # noqa: E402
+import drone_utils as P  # noqa: E402
+from drone_utils import make_drone_config  # noqa: E402
 
-from diffmpc.solvers.sqp_admm import (  # noqa: E402
-    SQPADMMSolver,
+from turbompc.solvers.turbompc_solver import (  # noqa: E402
+    TurboMPCSolver,
     ForwardBackend,
     BackwardBackend,
 )
-from diffmpc.utils.load_params import load_solver_params  # noqa: E402
+from turbompc.utils.load_params import load_solver_params  # noqa: E402
 
 # Pure-JAX GPU backends for both reference and swept runs, so the gradient-error
 # measurement is not confounded by FFI-vs-JAX numerical differences.
@@ -101,8 +102,8 @@ ADMM_ITER_LIST = [5, 10, 25, 50, 100, 300, 800]
 
 def solver_params(tol: float, admm_max_iter: int, scp_iter: int) -> Dict[str, Any]:
     """Solver params with overridden NLP tolerance / iteration budget."""
-    sp = load_solver_params("sqp_admm.yaml")
-    sp["num_scp_iteration_max"] = scp_iter
+    sp = load_solver_params("turbompc.yaml")
+    sp["num_sqp_iteration_max"] = scp_iter
     sp["tol_convergence"] = tol
     sp["linesearch"] = False
     sp["warm_start_backward"] = True
@@ -152,7 +153,7 @@ def cell_problem(cell: str, horizon: int = None):
 # Solve / objective
 # ---------------------------------------------------------------------------
 
-def make_solve_fns(solver: SQPADMMSolver, pp: Dict[str, Any]):
+def make_solve_fns(solver: TurboMPCSolver, pp: Dict[str, Any]):
     """Build (cost, solve) closures for one solver, pure in (weights, x0)."""
 
     def _solve(weights, x0):
@@ -167,7 +168,7 @@ def make_solve_fns(solver: SQPADMMSolver, pp: Dict[str, Any]):
     return cost, _solve
 
 
-def make_grad_solve(solver: SQPADMMSolver, pp: Dict[str, Any]):
+def make_grad_solve(solver: TurboMPCSolver, pp: Dict[str, Any]):
     """Return (grad_solve, cost_only) jitted+vmapped over seeds for one solver.
 
     grad_solve(weights, x0_batch) -> (grad_pytree, solution)  [one compile, reuses the
@@ -287,8 +288,8 @@ def run_cell(cell: str, x0_batch, tol_list, admm_iter_list, writer, horizon=None
     program, pp, weights0, umax, obstacles_on = cell_problem(cell, horizon=horizon)
 
     # ---- Ground truth at the (tightest affordable) reference solve ----
-    tight_solver = SQPADMMSolver(program, params=solver_params(**ref),
-                                 forward_backend=FWD, backward_backend=BWD)
+    tight_solver = TurboMPCSolver(program, params=solver_params(**ref),
+                                  forward_backend=FWD, backward_backend=BWD)
     ref_gs, ref_cost = make_grad_solve(tight_solver, pp)
     g_ad_pytree, sol_t = ref_gs(weights0, x0_batch)
     jax.block_until_ready((g_ad_pytree, sol_t))
@@ -310,8 +311,8 @@ def run_cell(cell: str, x0_batch, tol_list, admm_iter_list, writer, horizon=None
         configs.append(("admm_iter", it, dict(tol=SWEEP_B_TOL, admm_max_iter=it, scp_iter=SWEEP_SCP)))
 
     for sweep, sweep_var, spc in configs:
-        solver = SQPADMMSolver(program, params=solver_params(**spc),
-                               forward_backend=FWD, backward_backend=BWD)
+        solver = TurboMPCSolver(program, params=solver_params(**spc),
+                                forward_backend=FWD, backward_backend=BWD)
         gs, _ = make_grad_solve(solver, pp)
 
         out = gs(weights0, x0_batch)           # compile + warm-up
@@ -382,7 +383,7 @@ def main():
         tol_list = args.tol_list
         admm_iter_list = args.admm_iter_list
 
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "data")
     os.makedirs(out_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out_path = args.out or os.path.join(out_dir, f"grad_quality_{'smoke_' if args.smoke else ''}{stamp}.csv")

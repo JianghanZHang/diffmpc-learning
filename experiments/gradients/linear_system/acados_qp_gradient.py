@@ -20,7 +20,7 @@ import casadi as ca
 from acados_template import AcadosOcp, AcadosOcpSolver
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RES = os.path.join(HERE, "results")
+RES = os.path.join(HERE, "results", "data")
 D = np.load(os.path.join(RES, "acados_linear_problem.npz"))
 A, B, bvec = D["A"], D["B"], D["b"]
 Qd0, Rd0, X0 = D["Q_diag"], D["R_diag"], D["x0"]
@@ -126,7 +126,7 @@ def main():
               f"{(np.median(relv) if relv.size else float('nan')):9.2e}")
     np.savez(os.path.join(RES, "acados_tau_sweep.npz"), taus=np.array([r[0] for r in rows]),
              rows=np.array([r[1:] for r in rows]), n=n)
-    print("\nsaved results/acados_tau_sweep.npz")
+    print("\nsaved results/data/acados_tau_sweep.npz")
 
 
 if __name__ == "__main__":

@@ -67,7 +67,7 @@ exact-Hessian adjoint vs convergence-checked FD). Two findings:
 
 **To get a meaningful acados gradient-vs-accuracy curve, acados must solve a SOFT box** (acados
 supports L2 slacks) so the gradient is well-defined; then the iter-cap (two-solver) sweep is
-informative. Data: `acados_qp_itersweep.npz` (gAD = acados adjoint per sample).
+informative. Data: `data/acados_qp_itersweep.npz` (gAD = acados adjoint per sample).
 
 # CORRECTION: acados's tau_min smoothing DOES fix the gradient (= B's log-barrier idea)
 
@@ -105,7 +105,7 @@ cos=1.0 down to kappa=1e-11** (the kappa-sweep). Reason: B also carries the **el
 from the slack, with kappa secondary (consistent with the earlier kappa-sweep finding). acados here
 uses ONLY the barrier (no slack), so it needs tau_min >~ 1e-4 to smooth. Both are valid; B's
 slack+barrier is just more barrier-robust. Corrected experiment: `acados_qp_gradient.py`
-(tau_min sweep), data `acados_tau_sweep.npz`.
+(tau_min sweep), data `data/acados_tau_sweep.npz`.
 
 # Addendum: qp_solver_iter_max — works in a clean solve, bypassed in the differentiable config
 

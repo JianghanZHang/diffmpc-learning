@@ -50,5 +50,5 @@ on the **linear (nu=4)** and **cartpole (nu=1 nonlinear)** systems. The quadroto
 differentiable-rollout approach **scales to 13 states** (tractable, just a slow FD); (b) the pathology
 is **not universal** — the nu=4 nonlinear *hover* regime shows only a weak directional version, likely
 because its tight-box active set is stable rather than switching. Data:
-`closed_loop_quadrotor_*_umax{1p2,1p05_bigeps,1p0}.npz`. A switching-heavy nonlinear regime (e.g.
+`data/closed_loop_quadrotor_*_umax{1p2,1p05_bigeps,1p0}.npz`. A switching-heavy nonlinear regime (e.g.
 aggressive trajectory tracking, not hover) would be the right testbed to see the dramatic form at nu=4.

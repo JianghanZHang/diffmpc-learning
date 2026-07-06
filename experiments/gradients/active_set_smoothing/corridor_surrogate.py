@@ -10,8 +10,8 @@ sweep / multiplier-crossing / conditioning / tol-band HARNESS before the obstacl
 
 CPU-only (JAX_DENSE Schur, JAX_LOOP forward) -> no cuDSS/GPU; avoids the signal_mpc contention.
 
-    python research/.../active_set_smoothing/corridor_surrogate.py --check     # setup sanity (fwd only)
-    python research/.../active_set_smoothing/corridor_surrogate.py             # full sweep (added next)
+    python experiments/gradients/active_set_smoothing/corridor_surrogate.py --check  # setup sanity (fwd only)
+    python experiments/gradients/active_set_smoothing/corridor_surrogate.py          # full sweep
 """
 from __future__ import annotations
 import os, sys, argparse
@@ -40,7 +40,8 @@ from turbompc.solvers.qp_utils import ZShape, pack_x  # noqa: E402
 from turbompc.solvers.backward.backward_kkt_jax import solve_backward_kkt  # noqa: E402
 from diffmpc_learning.solvers.central_path_admm import to_one_sided, solve_qp_central_path  # noqa: E402
 from diffmpc_learning.solvers.backward import relaxed_complementarity_weight, augment_D_with_relaxed_ineq  # noqa: E402
-from corridor_problem import OptimalControlProblemCorridor  # noqa: E402
+from env.corridor_problem import OptimalControlProblemCorridor  # noqa: E402
+from util.plot import DATA_DIR, save_fig  # noqa: E402
 
 # ----- problem constants -----
 NX, NU = 4, 2                                          # (px,py,vx,vy), (ax,ay)
@@ -274,7 +275,7 @@ def run_sweep(npts, wq_lo, wq_hi, kappas):
     fig.suptitle(f"Corridor surrogate: coupled 2-wall activation at wq~{wq_act:.3f} "
                  f"(convex, linear walls) — hard vs central-path gradient", fontsize=12)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out = os.path.join(_HERE, "results", "corridor_surrogate.png"); fig.savefig(out, dpi=130); plt.close(fig)
+    save_fig(fig, "corridor_surrogate.png"); plt.close(fig)
 
     far = np.abs(wq - wq_act) > 0.1                              # away from the switch
     win = np.abs(wq - wq_act) < 0.02                             # transition band
@@ -288,10 +289,10 @@ def run_sweep(npts, wq_lo, wq_hi, kappas):
         banddev = float(np.max(np.abs((d_h - d_b[kap])[win]))) if win.sum() else float("nan")
         fardev = float(np.max(np.abs((d_h - d_b[kap])[far]))) if far.sum() else float("nan")
         print(f"   kappa={kap:g}: {banddev:22.3f} | {fardev:28.3f}")
-    np.savez(os.path.join(_HERE, "results", "corridor_surrogate.npz"),
+    np.savez(os.path.join(DATA_DIR, "corridor_surrogate.npz"),
              wq=wq, L_hard=L_h, dL_hard=d_h, fd=fd, conv=conv, wall=wall, wq_act=wq_act,
              **{f"dL_barrier_{k:g}": d_b[k] for k in kappas})
-    print(f"saved results/corridor_surrogate.png")
+    print(f"saved {os.path.join(DATA_DIR, 'corridor_surrogate.npz')}")
 
 
 def _solve_states_hard(solver, pp, wq):
@@ -309,10 +310,6 @@ def main():
     if a.check:
         check(); return
     run_sweep(a.npts, a.lo, a.hi, kappas=[1e-2, 1e-4, 1e-6])
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":

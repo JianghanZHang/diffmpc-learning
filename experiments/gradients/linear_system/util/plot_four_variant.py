@@ -1,19 +1,22 @@
 """2x2 box plots of per-sample cosine (variant AD vs the common hard-box GT) across solver tolerance, one
 panel per variant, with the BATCH-SUMMED cos median overlaid (red diamond) -- in the grad_box_accuracy
-style. Reads four_variant_benchmark.npz (external/turbompc, 10 seeds).
+style. Reads results/data/four_variant_benchmark.npz (external/turbompc, 10 seeds).
 
-    python experiments/linear_system/plot_four_variant.py
+    python experiments/gradients/linear_system/util/plot_four_variant.py
 """
 import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))  # linear_system/
+from util.plot import DATA_DIR, save_fig  # noqa: E402
+
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-Z = np.load(os.path.join(_HERE, "results", "four_variant_benchmark.npz"), allow_pickle=True)
+Z = np.load(os.path.join(DATA_DIR, "four_variant_benchmark.npz"), allow_pickle=True)
 ns = int(Z["nseeds"]); hz = int(Z["horizon"])
 
 TOLS = ["1e-09", "1e-07", "1e-05", "1e-03", "1e-01"]
@@ -52,6 +55,4 @@ axes[1, 0].legend(handles=[Patch(facecolor="lightblue", edgecolor="black", label
 fig.suptitle(f"4-variant closed-loop gradient accuracy vs the true hard-constrained gradient\n"
              f"(external/turbompc, horizon {hz}, {ns} seeds, SQP iter=1)", fontsize=12)
 fig.tight_layout(rect=(0, 0, 1, 0.95))
-out = os.path.join(_HERE, "results", "four_variant_benchmark.png")
-fig.savefig(out, dpi=150, bbox_inches="tight")
-print(f"saved {out}")
+save_fig(fig, "four_variant_benchmark.png")

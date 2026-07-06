@@ -1,9 +1,9 @@
 # Experiment E1.2 + E2.1 — Gradient quality vs. constraint activity and NLP tolerance
 
 **Date:** 2026-06-16 · **Testbed:** drone obstacle avoidance (`diffmpc2/examples/drone_obstacles/`)
-**Driver:** `gradient_quality_sweep.py` (this dir) ·
-**Plots:** `plot_gradient_quality.py` · **Data:** `outputs/grad_quality_20260616_164624.csv`
-(+ `.png`).
+**Driver:** `gradient_quality_sweep.py` (package root) ·
+**Plots:** `util/plot_gradient_quality.py` · **Data:** `data/grad_quality_20260616_164624.csv`
+· **Figure:** `plot/grad_quality_20260616_164624.png`.
 
 ## Setup
 
@@ -88,8 +88,8 @@ the non-monotone regime.
 ## Reproduce
 From the workspace root (`diffmpc-learning/`); needs the `diffmpc2` deps + a GPU:
 ```bash
-python research/gradient-quality-diffnmpc/experiments/quadrotor/gradient_quality_sweep.py --seeds 4  # ~25 min, GPU
-python research/gradient-quality-diffnmpc/experiments/quadrotor/plot_gradient_quality.py    # newest CSV -> PNG
+python experiments/gradients/quadrotor/gradient_quality_sweep.py --seeds 4        # ~25 min, GPU
+python experiments/gradients/quadrotor/util/plot_gradient_quality.py              # newest CSV in results/data -> results/plot PNG
 # quick check:
-python research/gradient-quality-diffnmpc/experiments/quadrotor/gradient_quality_sweep.py --smoke    # C1 only, ~90s
+python experiments/gradients/quadrotor/gradient_quality_sweep.py --smoke          # C1 only, ~90s
 ```

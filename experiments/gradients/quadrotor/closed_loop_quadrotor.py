@@ -134,8 +134,8 @@ def run(n_samples, seed, use_slack, sqp_iter, umax, x0_scale=1.0):
     for i in np.argsort(cos)[:8]:
         print(f"    sample {i:3d}: cos={cos[i]:+.5f} rel={rel[i]:.2e} flagged={bool(flagged[i])}")
     out = int(((cos < 0.99) | flagged).sum())
-    os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
-    np.savez(os.path.join(_HERE, "results", f"closed_loop_quadrotor_{'slack' if use_slack else 'hardbox'}.npz"),
+    os.makedirs(os.path.join(_HERE, "results", "data"), exist_ok=True)
+    np.savez(os.path.join(_HERE, "results", "data", f"closed_loop_quadrotor_{'slack' if use_slack else 'hardbox'}.npz"),
              cos=cos, rel=rel, flagged=flagged, gAD=gAD, gFD=gFD, umax=umax)
     print(f"  outliers (cos<0.99 or flagged): {out}/{n_samples}")
     return cos, rel, flagged

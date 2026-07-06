@@ -2,8 +2,8 @@
    turbompc-AD  vs  acados-exact (results/acados_grad.npz)  vs  convergence-verified FD.
 
 Step A (always): compute turbompc AD + converged-FD on the SHARED 128 samples
-   (results/x0_cartpole_128.npy), at K=1, tol=1e-9; save results/turbompc_grad.npz.
-Step B (if results/acados_grad.npz exists): build the 3-way cos/relmag table + verdict ->
+   (results/data/x0_cartpole_128.npy), at K=1, tol=1e-9; save results/data/turbompc_grad.npz.
+Step B (if results/data/acados_grad.npz exists): build the 3-way cos/relmag table + verdict ->
    results/acados_comparison.md.
 
 Run LOCALLY (resolves turbompc from the consolidated diffmpc2/ checkout via
@@ -15,7 +15,9 @@ import sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RES = os.path.join(HERE, "results")
+RES = os.path.join(HERE, "results")           # markdown result docs live at results/ root
+DATA = os.path.join(RES, "data")              # npz/npy/csv live in results/data/
+os.makedirs(DATA, exist_ok=True)
 sys.path.insert(0, HERE)
 
 
@@ -37,7 +39,7 @@ def compute_turbompc():
         TurboMPCSolver, parse_forward_backend, parse_backward_backend)
     from turbompc.problems.optimal_control_problem import OptimalControlProblem
 
-    x0 = np.load(os.path.join(RES, "x0_cartpole_128.npy"))
+    x0 = np.load(os.path.join(DATA, "x0_cartpole_128.npy"))
     dyn, pp = B.build_cartpole_problem(25, 1e7, 0.04)
     w = {k: pp[k] for k in B.WEIGHT_KEYS}
     reward = B.make_reward(jnp.zeros(4), jnp.zeros(1))
@@ -51,7 +53,7 @@ def compute_turbompc():
     sol_fn = jit(vmap(lambda x: s.solve(init, {**pp, "initial_state": x}, w)))
     sols = sol_fn(xj); jax.block_until_ready(sols.controls)
     st, ct = np.asarray(sols.states), np.asarray(sols.controls)   # (128,26,4),(128,26,1)
-    np.savez(os.path.join(RES, "turbompc_solution.npz"), states=st, controls=ct)
+    np.savez(os.path.join(DATA, "turbompc_solution.npz"), states=st, controls=ct)
     print(f"[turbompc] saved turbompc_solution.npz states{st.shape} controls{ct.shape} "
           f"u0[:3]={ct[:3,0,0]}")
     rs, rb = B.make_rollouts(s, dyn, pp, init, 1, reward)
@@ -59,13 +61,13 @@ def compute_turbompc():
     jax.block_until_ready(ad)
     gAD = np.concatenate([np.asarray(ad[k]).reshape(x0.shape[0], -1) for k in B.WEIGHT_KEYS], axis=1)
     gGT, flag = B.fd_per_state_converged(rb, xj, w, B.WEIGHT_KEYS, [1e-5, 1e-6, 3e-7, 1e-7], 1e-2)
-    np.savez(os.path.join(RES, "turbompc_grad.npz"), gAD=gAD, gGT=gGT, flagged=flag)
+    np.savez(os.path.join(DATA, "turbompc_grad.npz"), gAD=gAD, gGT=gGT, flagged=flag)
     print(f"[turbompc] saved turbompc_grad.npz  gAD{gAD.shape} gGT{gGT.shape} flagged={int(flag.sum())}")
     return gAD, gGT, flag
 
 
 def three_way(gAD, gGT, flag):
-    z = np.load(os.path.join(RES, "acados_grad.npz"))
+    z = np.load(os.path.join(DATA, "acados_grad.npz"))
     gAC = np.concatenate([z["grad_Q"], z["grad_R"].reshape(-1, 1)], axis=1)  # (128,5) [Q,R]
     n = gGT.shape[0]
     # comparison set: acados forward reached turbompc's SAME KKT point AND the FD is trustworthy
@@ -98,7 +100,7 @@ def three_way(gAD, gGT, flag):
 
 if __name__ == "__main__":
     g = compute_turbompc()
-    if os.path.exists(os.path.join(RES, "acados_grad.npz")):
+    if os.path.exists(os.path.join(DATA, "acados_grad.npz")):
         three_way(*g)
     else:
         print("(acados_grad.npz not present yet — run the acados --gradient step in Docker, "

@@ -19,10 +19,11 @@ HARM METRICS (what "hurts" means, all measured, per CLAUDE.md FD rule):
       how badly the gradient mispredicts a real step across the kink (hard) vs the rounded one (smoothed).
 
 CPU-only (scalar problem) -> no GPU/cuDSS needed.  Run:
-    python experiments/active_set_smoothing/paper_example1.py
+    python experiments/gradients/active_set_smoothing/paper_example1.py
 """
 from __future__ import annotations
 import os
+import sys
 os.environ.setdefault("JAX_PLATFORMS", "cpu")          # scalar toy: stay off the (contended) GPU
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -33,6 +34,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from util.plot import DATA_DIR, save_fig  # noqa: E402
+
 TAUS = [1e-2, 1e-3, 1e-4]                               # paper Fig 1 uses tau = 1e-2,1e-3,1e-4
 NEWTON_ITERS = 60                                       # plenty for this 1-D barrier subproblem
 FD_EPS = [1e-3, 3e-4, 1e-4, 3e-5, 1e-5, 1e-6, 1e-7]     # decreasing -> plateau check (CLAUDE.md)
@@ -140,8 +145,7 @@ def main():
     fig.suptitle("Diehl Example 1: active-set switch at |theta|=1 — hard gradient jumps, central-path smooths it",
                  fontsize=12)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out_png = os.path.join(_HERE, "results", "paper_example1.png")
-    fig.savefig(out_png, dpi=130); plt.close(fig)
+    out_png = save_fig(fig, "paper_example1.png"); plt.close(fig)
 
     # ---------- report (measured) ----------
     print("=== Diehl Example 1 reproduction — measured harm ===")
@@ -160,7 +164,7 @@ def main():
         print(f"     smoothed tau={tau:g} = {E_sm[tau].max():.4f}  at theta={th_np[E_sm[tau].argmax()]:.3f}")
     print(f"saved {os.path.relpath(out_png, _HERE)}")
 
-    np.savez(os.path.join(_HERE, "results", "paper_example1.npz"),
+    np.savez(os.path.join(DATA_DIR, "paper_example1.npz"),
              theta=th_np, x_hard=xh, dx_hard=dxh,
              **{f"x_smooth_{t:g}": xs[t] for t in TAUS},
              **{f"dx_smooth_{t:g}": dxs[t] for t in TAUS},

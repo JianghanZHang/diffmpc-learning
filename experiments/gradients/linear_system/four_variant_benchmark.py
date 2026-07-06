@@ -20,7 +20,7 @@ NOTE: external/turbompc is the verified-correct solver (diffmpc2 release-cleanup
 bug). Run with the .venv-cudss python (matches external's FFI build):
 
     /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \
-        experiments/linear_system/four_variant_benchmark.py --nseeds 10
+        experiments/gradients/linear_system/four_variant_benchmark.py --nseeds 10
 """
 from __future__ import annotations
 import os, sys, time, argparse, gc
@@ -303,7 +303,7 @@ def main():
                   f"{int((psall < 0.99).sum()):6d} {int((psall < 0).sum()):5d} | "
                   f"{np.median(bsall):8.3f} ({np.min(bsall):6.3f}) | {sub_str:>22}")
 
-    os.makedirs(os.path.join(_HERE, "results"), exist_ok=True)
+    os.makedirs(os.path.join(_HERE, "results", "data"), exist_ok=True)
     save = {"configs": np.array(CONFIGS), "tols": np.array(tols), "nseeds": nseeds, "batch": n,
             "horizon": HORIZON, "gt_nonconverged": gt_bad, "gt_conv_mask": conv_all}
     for (name, t), v in ps.items():
@@ -311,8 +311,8 @@ def main():
     for (name, t), v in bs.items():
         save[f"bs|{name}|{t:.0e}"] = np.array(v)
     out = "four_variant_benchmark_smoke.npz" if a.smoke else "four_variant_benchmark.npz"
-    np.savez(os.path.join(_HERE, "results", out), **save)   # smoke -> separate file, never clobbers the canonical npz
-    print(f"\nsaved results/{out}")
+    np.savez(os.path.join(_HERE, "results", "data", out), **save)   # smoke -> separate file, never clobbers the canonical npz
+    print(f"\nsaved results/data/{out}")
 
 
 if __name__ == "__main__":

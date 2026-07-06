@@ -20,7 +20,7 @@ import numpy as np
 import casadi as ca
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RES = os.path.join(HERE, "results")
+RES = os.path.join(HERE, "results", "data")   # machine-readable results live in results/data/
 M_C, M_P, L, G = 1.0, 0.1, 0.5, 9.81
 NX, NU, N_HOR, DT = 4, 1, 25, 0.04
 Q_NOM = np.array([1.0, 1.0, 10.0, 1.0])

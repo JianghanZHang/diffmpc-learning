@@ -1,7 +1,7 @@
 """Export the SAME random linear MPC as sweep_admm_tolerance.py so the acados QP-level check
 (run in the turbompc-acados Docker) uses identical data. Saves A,B,b,Q,R,x0 + meta.
 
-    python experiments/linear_system/acados_export_problem.py
+    python experiments/gradients/linear_system/acados_export_problem.py
 """
 import os, sys
 import numpy as np
@@ -14,7 +14,7 @@ from utils import generate_problem_data, N_STATE, N_CTRL  # noqa: E402
 HORIZON, UMAX, N_SAMPLES, SEED = 20, 1.0, 16, 0
 Q, R, A, B, b, x0 = generate_problem_data(N_SAMPLES, SEED, n_state=N_STATE, n_ctrl=N_CTRL)
 # turbompc discrete dynamics: x_{t+1} = x + dt*((A-I)x + B u + b), dt=1  =>  x_{t+1} = A x + B u + b
-out = os.path.join(_HERE, "results", "acados_linear_problem.npz")
+out = os.path.join(_HERE, "results", "data", "acados_linear_problem.npz")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 np.savez(out,
          A=np.asarray(A, float), B=np.asarray(B, float), b=np.asarray(b, float),

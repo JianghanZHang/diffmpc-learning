@@ -413,8 +413,9 @@ def run(args):
 
     if args.save_results and not args.calibrate:
         bound = "nobound" if args.umax >= 1e6 else f"umax{args.umax:g}"
-        # write to research/.../experiments/<system>/results/<run-tag>/  (the system's results folder)
+        # write to experiments/gradients/<system>/results/data/<run-tag>/ (the system's data folder)
         outdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", args.system, "results",
+                              "data",
                               f"{bound}_N{args.horizon}_dt{args.dt}_seeds{n_seeds}_convFDtolsweep")
         outdir = os.path.abspath(outdir)
         os.makedirs(outdir, exist_ok=True)
