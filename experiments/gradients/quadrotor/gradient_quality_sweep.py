@@ -44,7 +44,7 @@ import jax.numpy as jnp
 # diffmpc v1.0.0 may be pip-installed and would otherwise shadow it), and the drone-example dir
 # for sibling imports (timing_drone, benchmark_drone_params).
 _HERE = os.path.dirname(os.path.abspath(__file__))                     # .../experiments/quadrotor
-_DIFFMPC2 = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "diffmpc2"))
+_DIFFMPC2 = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "external", "diffmpc2"))
 _DRONE = os.path.join(_DIFFMPC2, "examples", "drone_obstacles")
 for _p in (_DIFFMPC2, _DRONE):
     if _p in sys.path:

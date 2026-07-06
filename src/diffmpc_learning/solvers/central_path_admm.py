@@ -14,12 +14,15 @@ import jax
 jax.config.update("jax_enable_x64", True)  # x64 required (Global Constraints)
 import jax.numpy as jnp
 
-# --- sys.path shim: resolve `turbompc` from the CANONICAL external/turbompc checkout ---
-# (NOT diffmpc2 — see CLAUDE.md: diffmpc2 has the hard-box multiplier-sign bug and lacks
-# get_inequality_lagrangian_hessian). 3 dirs up = repo root -> /external/turbompc.
+# --- sys.path shim: resolve `turbompc` from the CANONICAL external/diffmpc2 checkout ---
+# (branch LogBarrier-ADMM-QP: superset of external/turbompc — same sign-corrected solver +
+# inequality Hessian, plus the logbarrier ADMM QP backend and cuDSS version guards. NOT the
+# vendored diffmpc2/ at repo root — that release-cleanup checkout has the hard-box
+# multiplier-sign bug and lacks get_inequality_lagrangian_hessian.)
+# 3 dirs up = repo root -> /external/diffmpc2.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
-_SOLVER_ROOT = os.path.join(_REPO_ROOT, "external", "turbompc")
+_SOLVER_ROOT = os.path.join(_REPO_ROOT, "external", "diffmpc2")
 if _SOLVER_ROOT not in sys.path:
     sys.path.insert(0, _SOLVER_ROOT)
 

@@ -21,7 +21,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DL_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 _CART = os.path.join(_DL_ROOT, "experiments", "gradients", "cartpole")
-for _p in (os.path.join(_DL_ROOT, "src"), os.path.join(_DL_ROOT, "diffmpc2"), _CART):
+for _p in (os.path.join(_DL_ROOT, "src"), os.path.join(_DL_ROOT, "external", "diffmpc2"), _CART):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

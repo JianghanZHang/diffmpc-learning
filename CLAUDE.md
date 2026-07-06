@@ -8,25 +8,35 @@ Guidance for Claude Code working in this **project workspace**
 This is the **"Gradient Quality of Differentiable NMPC"** research project. It *uses* the
 TurboMPC solver but is kept separate from it.
 
-> **⚠️ 2026-06-26 — Use `external/turbompc` (GitHub `main`) as the canonical solver, NOT `diffmpc2/`
-> (`release-cleanup`).** diffmpc2 produces **wrong hard-box backward gradients**: its
-> `turbompc/solvers/turbompc_solver.py` is missing the inequality-multiplier **sign-correction**
-> (`y_ineq = −sign·y_g`, mapping ADMM bound duals → active-constraint multipliers; `sign =
-> lower_active − upper_active`) and the **lower/upper dual-sign disambiguation** that external has.
-> `backward_kkt_jax.py` (the DIRECT KKT assembly) is **identical** between them, so it is fed
+> **⚠️ 2026-07-02 — Canonical solver: `external/diffmpc2` (branch `LogBarrier-ADMM-QP`).** It is a
+> verified strict superset of the previously-canonical `external/turbompc` (`main`): the `turbompc/`
+> trees are identical except that diffmpc2 *adds* the log-barrier ADMM QP backend (forward
+> `ADMM_LOGBARRIER_CUDSS` + κ-relaxed differentiable backward, see HANDOFF.md 2026-07-02) and proper
+> `#if CUDSS_VERSION` guards (its FFI builds on cuDSS 0.7.1 **and** 0.8 from clean source — no manual
+> backport, unlike external/turbompc which still needs the sed-revert recipe). It carries the same
+> inequality-multiplier **sign-correction** (`y_ineq = −sign·y_g`, `sign = lower_active −
+> upper_active`), lower/upper dual-sign disambiguation, and inequality Lagrangian Hessian
+> (`get_inequality_lagrangian_hessian`). All project shims (`tests/conftest.py`,
+> `src/diffmpc_learning/solvers/central_path_admm.py`, `experiments/rl/drone_rl/*`) point at it.
+>
+> **Do NOT use the vendored `diffmpc2/` at repo root (`release-cleanup`)** — it produces **wrong
+> hard-box backward gradients**: its `turbompc/solvers/turbompc_solver.py` is missing the
+> sign-correction and dual-sign disambiguation above, so the (identical) DIRECT KKT assembly is fed
 > wrong-signed / mis-classified active multipliers at near-active constraints → outlier gradients
-> (benchmark `cos_all` median **~0.36**, negative cosines). External, same config/seeds/cuDSS 0.7.1 →
-> `cos_all` median **1.0**. **Re-validate every gradient-quality result that used `diffmpc2/` against
-> `external/turbompc`** (the earlier "DIRECT-backward outlier / weakly-active" findings in
-> `gradient_accuracy.md` are this diffmpc2 bug, not fundamental — the rollout warm-start was *refuted*).
-> Measured: `experiments/gradients/linear_system/results/benchmark_repro.md`; memory
-> `diffmpc2-hardbox-outliers-are-release-cleanup-specific` (incl. the cuDSS-0.7.1 build recipe — external's
-> `.cu` ship the cuDSS-0.8 API and need the same compat-shim/backport diffmpc2 used).
+> (benchmark `cos_all` median **~0.36**, negative cosines; correct solver, same config/seeds/cuDSS
+> 0.7.1 → **1.0**). Any gradient-quality result produced on it must be re-validated. Measured:
+> `experiments/gradients/linear_system/results/benchmark_repro.md`; memory
+> `diffmpc2-hardbox-outliers-are-release-cleanup-specific`.
 
 ```
 diffmpc-learning/
 ├── CLAUDE.md                              # this file
-├── diffmpc2/                             # the SOLVER (vendored dependency — keep pristine)
+├── external/
+│   ├── diffmpc2/                         # the SOLVER (CANONICAL, branch LogBarrier-ADMM-QP — keep pristine)
+│   ├── turbompc/                         # previous canonical (main); solver tree ⊂ external/diffmpc2
+│   └── PrismQP/                          # dense-QP barrier-retraction reference (own repo)
+├── src/diffmpc_learning/                 # project package: central-path (log-barrier) ADMM prototype
+├── tests/                                # project tests (conftest puts external/diffmpc2 on sys.path)
 └──    # THE PROJECT
     ├── notes/NOTE.md                           # living research log — start here
     ├── notes/REFERENCES.md                     # citation-grounded bibliography
@@ -43,10 +53,12 @@ diffmpc-learning/
             └── drone_rl/                 # Diff-WMPC 2×2 (gradient-mode × hard/barrier) on drone obstacle avoidance
 ```
 
-- **`diffmpc2/`** is the released solver (arXiv:2510.06179): SQP + ADMM, GPU linear solvers,
-  gradients via implicit differentiation of the KKT system (`jax.custom_vjp`). It is a separate
-  git repo (currently on branch `release-cleanup`). **Treat it as stable infrastructure and keep
-  it pristine** — do not add project files into it or commit research there.
+- **`external/diffmpc2/`** is the solver (arXiv:2510.06179 lineage, package name `turbompc`):
+  SQP + ADMM, GPU/cuDSS linear solvers, gradients via implicit differentiation of the KKT system
+  (`jax.custom_vjp`), plus the log-barrier ADMM QP backend. It is a separate git repo (branch
+  `LogBarrier-ADMM-QP`, pushed). **Treat it as stable infrastructure and keep it pristine** — do
+  not add project files into it; solver commits happen there deliberately, never as a side effect
+  of project work. (The formerly-vendored `diffmpc2/` at repo root has been removed.)
 - **``** is the active work. Start at `notes/NOTE.md`.
 
 ## The research questions (see notes/NOTE.md for full treatment)
@@ -72,7 +84,7 @@ diffmpc-learning/
   it is unverified. Never present an interpretation as a fact, and do not let one analysis's
   inference become the premise of the next.
 - **Ground claims in code.** When describing solver behavior, cite `file:line` (paths relative to
-  `diffmpc2/`). The mechanics are precise; don't paraphrase from memory.
+  `external/diffmpc2/`). The mechanics are precise; don't paraphrase from memory.
 - **Update the note, don't fork it.** `notes/NOTE.md` is a living log with a changelog — append findings;
   mark hypotheses confirmed/refuted with evidence.
 - **Run experiments on GPU, slack always on** (standing preference): batch over seeds with `vmap`;
@@ -92,44 +104,57 @@ diffmpc-learning/
   plateau exists in `[noise-floor eps, jump-distance eps]`, the sample sits on a discontinuity.
   Rationale + worked example: `notes/CARTPOLE_COUPLING_HANDOFF.md` §8–9.
 
-## Key solver entry points (in `diffmpc2/`)
+## Key solver entry points (in `external/diffmpc2/`)
 
-- **Solver + differentiation:** `diffmpc2/diffmpc/solvers/sqp_admm.py`
-  - `SQPADMMSolver.solve` (`:1372`) — `problem_params` is `jax.lax.stop_gradient`'d (`:1378`);
-    gradients flow only through the `weights` arg (so the differentiable MPC parameter is the cost
-    weight vector — the diffmpc-as-policy gradient).
-  - `jax.custom_vjp` (`:432`); `_solve_bwd` (`:1078`) → `_solve_bwd_direct` (`:830`, full KKT) or
-    `_solve_bwd_admm` (`:613`). `ForwardBackend`/`BackwardBackend` (`:46`/`:55`); `SQPADMMSolution`
-    (`:159`) exposes `convergence_error`, `num_iter`, `admm_iters`, `solver_stats`, `kkt_state`.
-- **General inequalities:** `diffmpc2/diffmpc/problems/optimal_control_problem.py` —
-  `inequality_constraints` (`:375`), obstacle `‖p−cᵢ‖≥rᵢ` (`:1305`), `SlackProblemAdapter` (`:1414`).
-- **Solver tolerances (RQ2 knobs):** `diffmpc2/diffmpc/solvers/params/sqp_admm.yaml`.
-- **Drone testbed:** `diffmpc2/examples/drone_obstacles/` (`make_drone_config` in `timing_drone.py`,
-  constants in `benchmark_drone_params.py`). FD ground truth: `diffmpc2/diffmpc/utils/gradient_finitediff.py`.
-- **diffmpc-as-policy (APG) reference:** `diffmpc2/notebooks/pointmass_rl/`,
-  `diffmpc2/examples/reinforcement_learning/spacecraft/apg/`.
+- **Solver + differentiation:** `turbompc/solvers/turbompc_solver.py` — `TurboMPCSolver` (`:301`),
+  `jax.custom_vjp` solve (`:1045`); the inequality-multiplier **sign-correction** feeding the
+  backward (`:898`, `sign = lower_active − upper_active`, `y_ineq = −sign·y_g`); the inequality
+  Lagrangian Hessian fold `_augment_D_with_inequality_hessian` (`:1362`).
+  `ForwardBackend`/`BackwardBackend` enums select the backends (gradient-correctness work
+  **requires the fused-cuDSS forward**: pure-JAX backends fail AD=FD on the obstacle).
+- **Log-barrier (central-path) QP backend:** forward `turbompc/solvers/admm/logbarrier_admm_qp.py`
+  (`to_one_sided`, `solve_logbarrier_admm_qp`) + `logbarrier_admm_cudss_ffi_backend.py`
+  (`ForwardBackend.ADMM_LOGBARRIER_CUDSS`); κ-relaxed differentiable backward
+  `turbompc/solvers/backward/logbarrier_backward.py` (`make_logbarrier_diff`, W-fold reduced KKT).
+  Suite: `tests/python/solvers/test_logbarrier_admm_qp.py`.
+- **General inequalities:** `turbompc/problems/optimal_control_problem.py` — obstacle
+  `‖p−cᵢ‖≥rᵢ` (`obstacle_avoidance.py`), `get_inequality_lagrangian_hessian` (`:1444`).
+- **Solver tolerances (RQ2 knobs):** `turbompc/solvers/params/turbompc.yaml` (+ `sqp.yaml`).
+  Speed needs jit + warm-start + QP-KKT 1e-6 / NLP-KKT 1e-3 (see memory
+  `turbompc-solve-speed-tolerances-warmstart`).
+- **FD ground truth:** `turbompc/utils/gradient_finitediff.py` (wrap in the convergence-checked
+  eps-sweep — see the FD rule above).
+- **diffmpc-as-policy (APG) reference:** `examples/pointmass_rl/`, `examples/RL_quadrotor.ipynb`.
 
 ## Running the experiments
 
 ```bash
-# from this workspace root (diffmpc-learning/); needs the diffmpc2 deps + a GPU
+# from this workspace root (diffmpc-learning/); needs a GPU
+# environment for cuDSS runs (fused backends, project tests):
+export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+PY=/home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python
+
+$PY -m pytest tests -v                                                    # project tests
 # drone/quadrotor obstacle-avoidance gradient-quality sweep (experiments/gradients/quadrotor/):
-python3 experiments/gradients/quadrotor/gradient_quality_sweep.py --smoke   # ~90s, C1 only
-python3 experiments/gradients/quadrotor/gradient_quality_sweep.py --seeds 4 # full, ~25 min
-python3 experiments/gradients/quadrotor/plot_gradient_quality.py            # newest CSV -> PNG
+$PY experiments/gradients/quadrotor/gradient_quality_sweep.py --smoke     # ~90s, C1 only
+$PY experiments/gradients/quadrotor/gradient_quality_sweep.py --seeds 4   # full, ~25 min
+$PY experiments/gradients/quadrotor/plot_gradient_quality.py              # newest CSV -> PNG
 ```
 
-- The scripts resolve `diffmpc2/` as a sibling (`../../../../../diffmpc2` from `experiments/gradients/quadrotor/`)
-  and put it on `sys.path` ahead of site-packages — needed because a *different* `diffmpc` v1.0.0 is
+- The scripts and `tests/conftest.py` resolve `external/diffmpc2/` (repo-relative) and put it on
+  `sys.path` ahead of site-packages — needed because a *different* `diffmpc` v1.0.0 is
   pip-installed at `/home/jianghan/Workspace/diffmpc2` and would otherwise shadow it.
 - Pure-JAX backends (`ADMM_JAX_LOOP_PCG` fwd, `DIRECT_JAX_DENSE` bwd) run on GPU without the FFI
-  build; x64 is required for trustworthy finite differences.
-- To build the solver's FFI backends or run its tests: `cd diffmpc2 && make install` (see
-  `diffmpc2/README.md`).
+  build; x64 is required for trustworthy finite differences. **But gradient-correctness tests need
+  the fused-cuDSS FFI** (already built at `external/diffmpc2/build/ffi/`; rebuilds work on cuDSS
+  0.7.1 and 0.8 from clean source thanks to the branch's `#if CUDSS_VERSION` guards).
+- To rebuild the FFI: `cmake -S turbompc/solvers/csrc -B build/ffi -DPython3_EXECUTABLE=$PY
+  -DPython3_FIND_VIRTUALENV=ONLY && cmake --build build/ffi -j` from `external/diffmpc2/`.
 
 ## Pointers
 
 - Project log: `notes/NOTE.md` · bibliography: `…/notes/REFERENCES.md` ·
   results: `…/experiments/gradients/quadrotor/results/RESULTS.md` (drone/quadrotor),
   `…/experiments/gradients/cartpole/results/cartpole_sweep.md` (cartpole).
-- Solver: `diffmpc2/README.md`, `diffmpc2/docs/`.
+- Solver: `external/diffmpc2/README.md`, `external/diffmpc2/docs/`.

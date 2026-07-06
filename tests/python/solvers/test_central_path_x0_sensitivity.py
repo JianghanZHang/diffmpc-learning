@@ -12,7 +12,7 @@ shape/interface test).
 cuDSS backend required. Run with:
   export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
   export XLA_PYTHON_CLIENT_PREALLOCATE=false
-  PYTHONPATH=external/turbompc <venv>/bin/python -m pytest tests/python/solvers/test_central_path_x0_sensitivity.py -v
+  PYTHONPATH=external/diffmpc2 <venv>/bin/python -m pytest tests/python/solvers/test_central_path_x0_sensitivity.py -v
 """
 import jax
 jax.config.update("jax_enable_x64", True)

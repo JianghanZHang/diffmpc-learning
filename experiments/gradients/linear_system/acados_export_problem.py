@@ -8,7 +8,7 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DL = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
-sys.path.insert(0, os.path.join(_DL, "diffmpc2", "benchmarking", "linear-system"))
+sys.path.insert(0, os.path.join(_DL, "external", "diffmpc2", "benchmarking", "linear-system"))
 from utils import generate_problem_data, N_STATE, N_CTRL  # noqa: E402
 
 HORIZON, UMAX, N_SAMPLES, SEED = 20, 1.0, 16, 0

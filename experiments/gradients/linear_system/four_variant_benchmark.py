@@ -33,8 +33,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _DL_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 # external/turbompc is the CANONICAL solver (see CLAUDE.md callout). NOT diffmpc2.
 for _p in (os.path.join(_DL_ROOT, "src"),
-           os.path.join(_DL_ROOT, "external", "turbompc"),
-           os.path.join(_DL_ROOT, "external", "turbompc", "benchmarking", "linear-system")):
+           os.path.join(_DL_ROOT, "external", "diffmpc2"),
+           os.path.join(_DL_ROOT, "external", "diffmpc2", "benchmarking", "linear-system")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

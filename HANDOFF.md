@@ -136,6 +136,185 @@ altitude-independent ⇒ cannot be escaped by climbing ⇒ forces an xy detour).
   verify_quadrotor, plot_h_sweep, plot_rollout}.py` + `trained_policies/` (NN weights kept separate from
   `results/`).
 
+## ✅ UPDATE 2026-07-02 — LogBarrier_ADMM_QP: decoupled CUDA log-barrier ADMM solver + κ-relaxed differentiable backward (`external/diffmpc2`, branch `LogBarrier-ADMM-QP`, **pushed to origin**)
+
+Built + validated a **standalone log-barrier (central-path) ADMM QP solver in `external/diffmpc2`** — CUDA forward **and** differentiable backward — as a *decoupled* turbompc backend (NOT a modification of the hard-box path; no new `inequality_mode`). This is the CUDA realization of the `src/diffmpc_learning` central-path prototype (§3), now with the κ-relaxed backward (open item #1 in §8 — **done**). 5 commits on `origin/LogBarrier-ADMM-QP`.
+
+- **Forward** (decoupled, cuDSS): `turbompc/solvers/admm/logbarrier_admm_qp.py` (`to_one_sided`, `solve_logbarrier_admm_qp`), `logbarrier_admm_cudss_ffi_backend.py` (`logbarrier_admm_qp_forward`), `ForwardBackend.ADMM_LOGBARRIER_CUDSS`. Only the ADMM **z-update** differs from hard-box (closed-form log-barrier retraction `b_γ`, elastic + γ-free pure); shared kernels extracted to `admm_cudss_shared.cuh`. Matches the JAX oracle + hard QP as κ→0 (gates: elastic 1.8e-9, barrier 2.9e-9, vs-hard 6.3e-8).
+- **Backward** (`turbompc/solvers/backward/logbarrier_backward.py`): the **κ-relaxed W-fold reduced KKT** — `W = y_g/(s+y_g/γ)` [elastic] or `y_g/s` [pure], fold `G1ᵀdiag(W)G1` + exact Lagrangian Hessian `λᵀ∇²f + y_g_net·∇²g` into D, solve the reduced equality-KKT via `solve_backward_kkt_cudss_ffi`. `make_logbarrier_diff` = `jax.custom_vjp` (w.r.t. weights + x0). **Ported from the FD-verified `src/diffmpc_learning/solvers/backward.py`** + the new pure-barrier branch. **KEY design:** `_bwd` uses the forward SQP's **cached converged duals** (`logbarrier_nlp_solve` returns `(y_f_0,y_f_dyn,y_g)`), NOT a backward re-solve — a cold re-solve drifts off `states_c` (esp. `y_f` init 0) → wrong duals. Cross-check: cached `y_g` vs closed-form barrier dual `y_g_eq=κ/s(states_c)` = **2.5e-10** (confirms convergence; the analytical dual is exact — barrier complementarity is separable per row).
+- **cuDSS build-skew ELIMINATED on this branch** (commit `973655c`): replaced the fragile build-time `sed`-revert (0.7.1 vs 0.8 `cudssMatrixCreateCsr`) with proper `#if CUDSS_VERSION>=800` guards + a `<0.8` symbol-name shim across all 3 `.cu`/`.cuh` sites — the FFI now builds on **both** cuDSS versions from clean source, **no manual backport**. (Supersedes the §6 / 06-26 sed recipe *for `external/diffmpc2` on this branch only*; `diffmpc2/` release-cleanup + `external/turbompc` still need theirs.)
+- **Gradient accuracy** (AD vs convergence-checked `gradient_finite_diff`, all at small κ): **∇²f (dynamics Hessian): interior drone κ=1e-6, cos=1.0, rel=5.5e-5** (exact at the near-hard regime); ∇²g+W-fold: obstacle-elastic κ=1e-4 cos=1.0; pure-W: box-pure cos=1.0; x0 sign cos=1.0; reduced-KKT cuDSS==dense 7.6e-8; ablation (Hessian on/off) ratio 17.8×. Suite: `tests/python/solvers/test_logbarrier_admm_qp.py`. Whole-branch opus review: math faithful to the reference, hygiene clean (no `.so`/`.bak`/backport committed).
+
+**⚠️ CORRECTION — FD converges for hard projection; being AT an active constraint is NOT "unscorable".** An earlier framing (mine) called the pure-barrier + active-constraint + small-κ case "inherently unscorable" because the trajectory sits on the boundary — **that was wrong.** The parametric solution map `w↦x*(w)` is differentiable wherever the **active set is locally constant** (IFT on the KKT); hard projection onto the active face is a smooth operation with a well-defined gradient — exactly what the implicit-KKT backward computes, and FD converges there. Non-differentiability arises ONLY at active-set **changes** in *parameter* space (measure-zero), NOT at active constraints per se. The drone-pure gate's FD **flagging** at small κ was a **numerical artifact**: at small κ the pure barrier is ill-conditioned (`s=κ/y_g→0`), the solve is noisy, and at the ~1 mm constraint margin the FD plateau window (above the noise floor, below an active-set-change distance) was too narrow — the convergence-check correctly flagged the noise instead of scoring it. Fixable by FD tuning (eps above the noise floor, larger margin, tighter solver); the gradient exists and AD computes it (confirmed exact in the interior W=0 case). The **κ-sweep** (`scratchpad/kappa_sweep.py`, κ=1→1e-6) further confirmed the ~1.37% seen at κ=1 was **entirely** the W-fold SQP-linearization on the active obstacle (`W=κ/s²≈6`), not a ∇²f error. **Open follow-up:** a *direct* pure-barrier + active-constraint AD-vs-FD demonstration at small κ (FD tuned above the noise floor) — not yet run as a gate; the current ∇²f gate uses an interior (W=0) fixture to isolate the dynamics Hessian.
+
+**Commits** (`origin/LogBarrier-ADMM-QP`): `cd7e9a1` W-fold backward + `make_logbarrier_diff` · `973655c` cuDSS version-guard · `af0db65` gradient gates + analytical `y_g` · `8bf271d` cache forward duals / drop re-solve · `0cff888` κ-sweep + re-anchor gate to κ=1e-6.
+
+## ✅ UPDATE 2026-07-02 (cont.) — `external/diffmpc2` designated CANONICAL solver; both suites re-run green on it
+
+**Canonical solver is now `external/diffmpc2` (branch `LogBarrier-ADMM-QP`), superseding
+`external/turbompc`** (user decision). Verified safe before switching: the two `turbompc/` package
+trees are **identical** except diffmpc2 *adds* the logbarrier backend files/registrations and the
+`#if CUDSS_VERSION` guards (external/turbompc still carries the manual 0.7.1 sed-revert + `.bak`s);
+`benchmarking/` identical. The sign-correction (`turbompc_solver.py:898`), dual disambiguation, and
+inequality Hessian (`:1362`) are all present. CLAUDE.md callout + memory rewritten accordingly.
+
+- **Logbarrier QP suite (the ask): 21/21 PASS** (`tests/python/solvers/test_logbarrier_admm_qp.py`,
+  fused cuDSS, 46:53). FD-vs-AD gates: box-elastic cos=1.000000/rel=1.7e-7, box-pure 1.000000/5.8e-6,
+  obstacle-elastic 1.000000/1.7e-3, drone-pure-interior (κ=1e-6) 1.000000/5.5e-5, x0 1.000000/5.6e-8 —
+  all FD-converged (flagged=False). **FD did NOT plateau (flagged=True) in 3 gates** — obstacle-pure,
+  drone-elastic, drone-pure (all nonconvex + trajectory at/near the obstacle, min_dist 0.28–0.40):
+  per the FD rule these are NOT scored on cos/rel; the tests assert flag-attribution + AD finite &
+  nonzero (printed cos ≥0.999846 but unreliable when flagged). ⇒ the pure-barrier+active-constraint
+  case still has NO FD-verified accuracy number — the tuned-FD direct gate remains the open follow-up
+  above. Also: reduced-KKT cuDSS==dense 2.1e-7, ineq-Hessian ablation 17.8×.
+- **Local project suite: 23/23 PASS on the new shim** (34:45; includes the 5 backward-central-path,
+  5 x0-sensitivity/BPTT, 3 inequality-Hessian, 2 NLP-KKT gates).
+- **Switch mechanics:** all `sys.path` shims + `PYTHONPATH=` usage lines now resolve
+  `external/diffmpc2` — `tests/conftest.py`, `src/diffmpc_learning/solvers/central_path_admm.py`,
+  all of `experiments/rl/drone_rl/`, and the gradient-experiment scripts. Two pre-existing breakages
+  found & fixed: (1) **the vendored `diffmpc2/` at repo root NO LONGER EXISTS** — the legacy
+  cartpole/quadrotor scripts were shimming a dead path (⇒ §6's uncommitted-`.cu`-revert gotcha and
+  the old `diffmpc2/build/ffi` instructions are OBSOLETE); (2) `tests/conftest.py` still added the
+  pre-flatten `research/gradient-quality-diffnmpc/experiments/cartpole` path — collection was broken;
+  now `experiments/gradients/cartpole`. Not committed (this repo); `external/diffmpc2` untouched
+  (only its untracked `test_turbompc_x0_sensitivity.py` from earlier remains).
+
+## ✅ UPDATE 2026-07-02 (cont. 2) — FD false-flags root-caused (termination-error floor) + elastic α-throttle mechanism CONFIRMED
+
+**(1) The 3 FD-flagged logbarrier gates were false flags — FD converges (user was right).** Root
+cause (measured, `scratchpad/fd_flag_diagnosis.py` + log): the fine eps ladder (1e-5,3e-6,1e-6) sat
+entirely below the **SQP termination-error floor** — solves stopping at `sqp_tol=1e-6` carry a
+deterministic ~5e-8 cost error (repeat-spread ≤2e-14 ⇒ NOT GPU noise; tol=1e-8 re-solve moves cost
+~6e-10 and lands FD on AD), amplified by 1/(2ε) ⇒ ~0.25–2.5% FD error ≫ the 2e-3 plateau rtol.
+NO local-min switch ever fired (obstacle margin/side bit-stable across every ± solve, ε≤1e-3).
+On (1e-3,3e-4,1e-4) FD plateaus and matches AD: **obstacle-pure rel=1.12e-4, drone-pure 6.30e-5,
+drone-elastic 7.64e-4, obstacle-elastic 1.93e-3 — all cos=1.000000, all flagged=False** (5 gates
+re-run PASS, incl. ablation 19.7×). Fix: `_NLP_EPS_SEQ_R=(1e-3,3e-4,1e-4)` in
+`test_logbarrier_admm_qp.py` (uncommitted, external/diffmpc2). **This closes the "open follow-up"
+above: the pure-barrier + ACTIVE-constraint case (margin≈1e-3=κ/y_g) is now FD-verified.**
+
+**(2) drone-elastic one-sided "stall" mechanism CONFIRMED (`scratchpad/fd_stall_diagnosis.py`):
+merit/formulation mismatch, elastic-only — not a broken line search, and NOT κγ numerology (refuted:
+κ=1e-2 gives the identical trace).** α-history: stalling directions (R[0]+ε / R[1]−ε) pin **α=0.1
+(grid min) for all 60 iters**; `linesearch=False` ⇒ same solves converge in **6–7 full-Newton iters**
+(identical conv trace to the good directions). Two elastic-path defects in `logbarrier_nlp_solve`:
+(a) the backtracking merit is evaluated with the program's `use_slack_variables=False` ⇒ it penalizes
+the RAW inequality violation that the elastic optimum *intentionally* carries (ξ≈1.6e-2 on this
+fixture) ⇒ rejects good steps one-sidedly (directions that deepen the sag); (b) the reported KKT≈1e-2
+at the cap is the **slack-stationarity transient** `‖γ·slacks+y_g‖ = 0.9^k·‖y_g‖∞` (slacks init 0,
+α-blended while duals are NOT) — 5.5·0.9⁵⁹ = 9.9e-3 exactly; the primal sits at stat≈5e-6 the whole
+time (decomposition: stat 5.5e-6, eq 1.6e-12, ineq 8.1e-5 ⇒ conv=9.9e-3 is the unprinted 4th term).
+The pure barrier is immune (interior, no slack state); cold-start converges (α ramps 0.1→1, 16 it).
+The local `src/diffmpc_learning` prototype avoids both by design (full Newton + analytic conv-check
+slack `s=−y_g/γ` — §4). **Solver-fix options (NOT applied; decide deliberately):** default
+`linesearch=False` for the elastic path, and/or stop α-blending the slack state (adopt `−y_g/γ`
+post-linesearch), and/or make the merit elastic-aware (SlackProblemAdapter semantics). ⚠️ Relevant
+to V2/V4 training: elastic forward solves can be α-throttled directionally ⇒ budget-capped solves
+return slightly-off primals + inconsistent cached duals for the backward. (The asymmetry's
+sign-selectivity is strongly indicated by the merit's violation term but was not itself
+instrumented — merit values along the step not printed.)
+
+## ✅ UPDATE 2026-07-02 (cont. 3) — elastic α-throttle FIXED (barrier merit + analytic slack); pure-mode ∞-merit collapse found & FIXED (relaxed-barrier merit); hard-box iteration parity
+
+**Implemented in `external/diffmpc2` `turbompc/solvers/backward/logbarrier_backward.py` (uncommitted):**
+1. **`barrier_merit_linesearch`** — the ℓ1 exact penalty of the BARRIER formulation
+   (`f + Σψ_κ,γ(r) + μ‖eq‖₁`; inequalities live inside ψ, only eq penalized; same α-grid/η/μ
+   machinery as `turbompc.solvers.linesearch`). ψ closed forms: `elastic_psi` (via the retraction
+   root, globally smooth, `dψ/dr = γξ* =` row dual — FD-verified to machine precision) and
+   `pure_psi` (reference only). Replaces the hard-violation merit that was minimized O(ξ)=1.6e-2
+   off the elastic fixed point (⇒ merit-formulation mismatch ⇒ α pinned 0.1).
+2. **Analytic slack** — `slacks = −y_g/γ` adopted post-step; the slack is no longer a
+   zero-initialized, α-blended linesearch state (that lag manufactured the phantom
+   `slack_stationarity = 0.9^k·‖y_g‖∞` residual, e.g. 5.5·0.9⁵⁹ = the "9.9e-3 stall").
+3. **Relaxed-barrier merit for the PURE mode** (`_PURE_MERIT_RELAX_GAMMA=1e8`; Feller/Ebenbauer-
+   style relaxed log barrier — `elastic_psi` IS the smooth relaxation, merit-only, the inner solve
+   still targets the true pure barrier). Root cause it fixes (measured, `pure_merit_breakdown.py`):
+   the pure 60-cap warmup ended **silently non-converged and +1.8e-3 obstacle-INFEASIBLE**, where
+   `pure_psi=+∞` ⇒ `merit(current)=∞` ⇒ Armijo finite-mask collapse ⇒ unconditional α=0.1 fallback
+   (this, not merit-offset, was the pure crawl; it also means every prior "pure warm-started" probe
+   ran from a slightly-off point). Interior merit bias of the relaxation: O(κ/(γs²)) ≈ 1e-6 rel.
+
+**Measured (probes, drone N=8 / obstacle N=5, tol 1e-6):** elastic warm ±1e-4: 60-cap crawl →
+**7/7 iters α=1** (ls=False trace exactly recovered); pure: drone 51→**5-6**, obstacle 44→**8-10**,
+all α≈1, ± symmetric; cold elastic 17 iters (α ramps 0.7→0.1→1 — globalization intact); κ∈{1e-6,1e-2},
+γ=1e3 variants all 7-10 iters. **Hard-box comparison (same fixtures/protocol/tol,
+`hardbox_iters_probe.py`): hard warm 5-6 (drone) / 9-10 (obstacle), cold 11/17 — the fixed
+logbarrier is at hard-box ITERATION PARITY warm (+0-1 iter), and NOTE `turbompc.yaml` ships
+`linesearch: False` — the canonical hard solver globalizes by full Newton, no merit LS at all.**
+New tests: `test_barrier_merit_psi_identities`, `test_logbarrier_linesearch_not_throttled`
+(parametrized elastic+pure; also asserts the COLD warmup converges — would have caught the silent
+pure non-convergence). Diagnostics: `scratchpad/{fd_stall_diagnosis, pure_merit_breakdown,
+row_id_probe, hardbox_iters_probe, pure_asymmetry_probe}.py`.
+
+⚠️ Follow-up: the problem-level `equality_constraints` ℓ1 defect read 3.5e-3 at the
+(non-converged) pure warm start — most likely just that non-convergence, but re-measure at a truly
+converged point to rule out an integrator-convention mismatch (it takes `controls[:horizon],
+controls[1:]`). (The full-suite follow-up is resolved — see cont. 4: 26/26 on the final code.)
+
+## ✅ UPDATE 2026-07-02 (cont. 4) — OUTER-SLACK globalization: fraction-to-boundary + Wächter-Biegler FILTER + full restoration; now the DEFAULT for both modes
+
+**Implemented (user-directed) the standard nonlinear-IPM globalization in `logbarrier_backward.py`
+(~200 lines, NO inner-solver/kernel changes):** `globalization="filter"|"merit"|"none"` on
+`logbarrier_nlp_solve`/`make_logbarrier_diff` (auto = filter; `linesearch=False` = none).
+- **Outer slack `s_outer`** — an NLP-LEVEL iterate (one per one-sided row), persistent across SQP
+  iterations, initialized interior (`max(−r(x₀), 1e-8)`) and allowed to DISAGREE with `r(x)`:
+  the disagreement `‖r(x)+s‖₁` lives in the filter's θ as a violable-equality residual (the IPM
+  device that parks infeasibility FINITELY — the pure barrier φ only ever sees `s>0`, never
+  `g(x)`, so the ∞-collapse is structurally impossible). Slack step target after each inner solve
+  = the converged barrier complementarity **`s_target = κ/y`** (exact per row) ⇒ the inner QP,
+  kernels, and backward are untouched.
+- **Fraction-to-boundary** (τ=0.99, closed-form on `s`) caps every trial; **filter** (θ,φ) pairs
+  with sufficient-decrease + domination + f-type/θ-type switching + Armijo-on-φ + filter reset on
+  κ-anneal; **full restoration phase** (dedicated θ-minimizing sub-loop: slack refresh + inner-QP
+  steps + Armijo-on-θ under FTB) when the filter rejects all trials.
+- **A/B vs the relaxed-barrier merit** (`filter_ab_probe.py`, drone N=8, both modes × cold/warm ±ε/
+  infeasible-start(3e-3 into the obstacle)): warm 6-7 iters BOTH arms both modes (ties);
+  **elastic COLD: filter 12 iters all-α=1 vs merit 17 (α-ramp) — filter wins ~30%**; pure cold 11
+  both (filter exercised restoration once, correctly); infeasible-start 1-2 iters both arms
+  (merit's stiff quadratic and the filter's restoration both recover in one step). Per the staged-
+  adoption decision, **filter is now the default for BOTH modes**; merit retained as fallback.
+  Hard-box parity now holds cold AND warm (hard: 11 cold / 5-6 warm).
+- Regression test extended: `test_logbarrier_linesearch_not_throttled` now parametrized
+  (use_slack × globalization) — 4 combos, each asserting cold-warmup convergence + ≤20-iter warm
+  solves. **Definitive full-suite run on the final code: 26/26 PASS (48:17)** — all QP/CUDA
+  oracle gates, all FD-vs-AD gradient gates (unflagged, values matching the verified eps-ladder
+  numbers), ψ identities, and all 4 no-throttle combos (cold 11–17 it, warm 5–7 it, α≈1).
+- Caveat: `globalization="filter"` auto-falls-back to "merit" when
+  `rescale_optimization_variables=True` (unscaled `r(x)` vs scaled QP duals not reconciled).
+
+## ✅ UPDATE 2026-07-05 — V2/V4 (barrier arms) TRAINED on the grazing quadrotor: both learn; the ELASTIC RELAXATION IS EXPLOITABLE by the weight-learning outer loop
+
+**Infrastructure** (new `experiments/rl/drone_rl/barrier_modes.py` + `train.py` 4-variant dispatch):
+V2=plan_barrier / V4=bptt_barrier on the CANONICAL diffmpc2 logbarrier layer (elastic κ=1e-4,
+γ=1e2, filter globalization, sqp_tol=1e-3 training tolerance to match the hard arms' NLP 1e-3),
+eager estimators mirroring V1/V3 semantics exactly; receding-horizon warm start held in a concrete
+cell inside the custom_vjp forward (tracing-invisible; analog of the detached `shift_guess`).
+**Backward at training tolerance uses the ANALYTIC barrier dual** (`yg_mode="analytic"`:
+`y_g_eq=κ/s(states_c)`, exact per row) — the cached forward dual is O(10–26%) stale on grazing
+steps at tol 1e-3 and tripped the strict crosscheck assert (now parameterized; gates unchanged).
+Verified: loose-solve analytic-dual gradient vs tight FD-verified reference **cos=1.000000,
+rel=2.1e-5**. Also: `--time_budget` (was a hidden hardcoded 1200s bail-out that truncated the
+first attempts), incremental CSV flush, `--barrier_glob` (NOTE: earlier "filter vs none identical"
+observation was an artifact — the flag wasn't plumbed; never actually A/B'd in training).
+~127 s/update (V2) / ~350 s (V4@h=24): the eager SQP fwd+bwd dominates ⇒ the fused-CUDA NLP loop
+(§8 item 2) is the speed lever.
+
+**Results (seed 0; V2: lr=1e-2, 100 upd; V4: h=24, lr=3e-3, 95 upd — 12h budget):**
+- **V4: stable monotone learning 45.8→29.6 eval**, grads bounded (median 3.4, max 48) across
+  persistent grazing — consistent with the exact-a.e.-gradient finding (no active-set instability).
+- **V2: learned to 29.0 by upd 70, then DESTABILIZED** (eval 56–59 for upd 80–100, grad spikes to
+  183) at lr=1e-2 — the V1-family lr on the barrier arm is not late-run stable (seed 0).
+- **⚠️ KEY FINDING — the elastic relaxation is exploitable:** BOTH arms progressively deepen
+  constraint penetration during training: eval closest-margin +0.08→**+0.49**, 7–9/35 eval steps in
+  violation (task loss has no obstacle term; enforcement is the MPC's job). Mechanism (consistent
+  with elastic KKT, labeled hypothesis for the write-up): the NN raises cost weights → constraint
+  duals y grow → elastic sag ξ=y/γ grows → the "better" eval cost (29.6 vs hard V1's 32.7) is
+  bought by cutting through the obstacle. Hard arms structurally cannot (0 violations). ⇒ raw
+  eval-cost comparison hard-vs-elastic is NOT apples-to-apples; report cost+violations jointly.
+- Follow-ups: γ-sweep (1e3/1e4 shrinks the exploit ~linearly), pure-barrier arms (no sag by
+  construction), re-eval barrier-trained weights under the HARD deploy controller, V2@lr=3e-3,
+  multi-seed. CSVs: `results/train_quadrotor_{plan,bptt}_barrier_seed0.csv`; policies saved.
+
 ## ⏭️ NEXT TASK — barrier V2/V4 on the GRAZING quadrotor + write-up
 
 1. **Hard-vs-barrier (V2/V4) — now testable.** The quadrotor's realized trajectory GRAZES (real
@@ -150,7 +329,7 @@ altitude-independent ⇒ cannot be escaped by climbing ⇒ forces an xy detour).
    governed by the estimator's effective HORIZON (truncation), NOT by active-set non-smoothness — the
    *opposite* of the linear-drone-era "hard jumps destabilize BPTT" framing.
 
-Run env: `external/turbompc` on PYTHONPATH, `.venv-cudss` python, cuDSS backends, QP 1e-6 / NLP 1e-3 (hard);
+Run env: `external/diffmpc2` on PYTHONPATH (CANONICAL — see 07-02 update), `.venv-cudss` python, cuDSS backends, QP 1e-6 / NLP 1e-3 (hard);
 training lr=1e-2 (V1) / lr=3e-3 (V3 — needed for h≥16 to converge). The local central-path backward
 (`src/diffmpc_learning`) is correct & immune to the diffmpc2 multiplier-sign bug (one-sided rows + smooth
 complementarity weight `W = y_g/(s + y_g/γ)`, never a two-sided hard active-set).

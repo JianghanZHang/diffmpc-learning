@@ -1,4 +1,4 @@
-"""pytest configuration: add src/, external/turbompc/, benchmarking, and experiment dirs to sys.path."""
+"""pytest configuration: add src/, external/diffmpc2/, benchmarking, and experiment dirs to sys.path."""
 import os
 import sys
 
@@ -10,9 +10,11 @@ _SRC = os.path.join(_REPO_ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-# 2. external/turbompc/: makes `turbompc` importable (CANONICAL solver, not diffmpc2 — see
-#    CLAUDE.md; diffmpc2 has the hard-box sign bug and lacks get_inequality_lagrangian_hessian)
-_TURBOMPC = os.path.join(_REPO_ROOT, "external", "turbompc")
+# 2. external/diffmpc2/: makes `turbompc` importable (CANONICAL solver, branch LogBarrier-ADMM-QP —
+#    see CLAUDE.md; superset of external/turbompc with the sign-corrected solver + inequality
+#    Hessian + logbarrier QP backend. NOT the vendored diffmpc2/ at repo root, which has the
+#    hard-box sign bug and lacks get_inequality_lagrangian_hessian)
+_TURBOMPC = os.path.join(_REPO_ROOT, "external", "diffmpc2")
 if _TURBOMPC not in sys.path:
     sys.path.insert(0, _TURBOMPC)
 
@@ -22,9 +24,6 @@ if _BENCH not in sys.path:
     sys.path.insert(0, _BENCH)
 
 # 4. cartpole experiment dir: makes `benchmark_cartpole_coupling` importable
-_CARTPOLE = os.path.join(
-    _REPO_ROOT,
-    "research", "gradient-quality-diffnmpc", "experiments", "cartpole",
-)
+_CARTPOLE = os.path.join(_REPO_ROOT, "experiments", "gradients", "cartpole")
 if _CARTPOLE not in sys.path:
     sys.path.insert(0, _CARTPOLE)

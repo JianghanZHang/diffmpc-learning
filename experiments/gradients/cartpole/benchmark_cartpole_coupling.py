@@ -66,7 +66,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 4 dirs to diffmpc-learning/, then into diffmpc2/.
 _DL_ROOT = os.path.abspath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))   # diffmpc-learning/
-_SOLVER_ROOT = os.path.join(_DL_ROOT, "diffmpc2")
+_SOLVER_ROOT = os.path.join(_DL_ROOT, "external", "diffmpc2")
 sys.path.insert(0, _SOLVER_ROOT)
 from turbompc.dynamics.cartpole_dynamics import (  # noqa: E402
     CartpoleDynamics,
