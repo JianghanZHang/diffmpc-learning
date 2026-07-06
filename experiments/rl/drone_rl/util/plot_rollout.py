@@ -6,20 +6,21 @@ h=8 stalls at the obstacle, h>=24 matches V1). So this figure shows that with an
 window BOTH estimators reach the goal around the obstacle.
 
 Self-contained: if a policy .npz is missing it (re)trains that variant first (cuDSS), saves
-it under trained_policies/, then rolls out and plots. Output: results/quadrotor_rollout_v1_v3.png.
+it under trained_policies/, then rolls out and plots. Output: results/plot/quadrotor_rollout_v1_v3.png.
 
 Run (cuDSS env):
   export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
   export XLA_PYTHON_CLIENT_PREALLOCATE=false
-  PYTHONPATH=external/turbompc /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python -u \
-    experiments/rl/drone_rl/plot_rollout.py
+  PYTHONPATH=external/diffmpc2 /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python -u \
+    experiments/rl/drone_rl/util/plot_rollout.py
 """
 from __future__ import annotations
 import os, sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
-for _p in (_HERE, os.path.join(_REPO_ROOT, "src"), os.path.join(_REPO_ROOT, "external", "turbompc")):
+_PKG = os.path.dirname(_HERE)                       # drone_rl/
+_REPO_ROOT = os.path.normpath(os.path.join(_PKG, "../../../"))
+for _p in (_PKG, os.path.join(_REPO_ROOT, "src"), os.path.join(_REPO_ROOT, "external", "diffmpc2")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -31,14 +32,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import quadrotor_env as env
+from env import quadrotor_env as env
 import train as train_mod
 from mpc_layer import make_hard_layer
 from policy import make_theta_to_weights
 from gradient_modes import make_initial_guess, prime_guess, shift_guess
 
-_RD = os.path.join(_HERE, "results")
-_POLICY_DIR = os.path.join(_HERE, "trained_policies")
+from util.plot import PLOT_DIR as _RD  # figures -> results/plot
+_POLICY_DIR = os.path.join(_PKG, "trained_policies")
 os.makedirs(_POLICY_DIR, exist_ok=True)
 SEED, N_UPDATES, N_STEPS = 0, 40, 50
 V3_H = 24

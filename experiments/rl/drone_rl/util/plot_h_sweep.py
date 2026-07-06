@@ -20,7 +20,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_RD = os.path.join(_HERE, "results")
+import sys
+sys.path.insert(0, os.path.dirname(_HERE))  # drone_rl/
+from util.plot import DATA_DIR, PLOT_DIR  # noqa: E402
+
 DT = 0.05            # quadrotor_env.DT
 TASK_STEPS = 34      # ~closed-loop steps to reach the goal (eval_steps=50 horizon)
 HS = [8, 16, 24, 32]
@@ -39,13 +42,13 @@ def _eval_series(path):
 
 def main():
     # V1 reference (its converged eval is robust to lr)
-    _, v1 = _eval_series(os.path.join(_RD, "train_quadrotor_plan_hard_seed0.csv"))
+    _, v1 = _eval_series(os.path.join(DATA_DIR, "train_quadrotor_plan_hard_seed0.csv"))
     v1_final = float(v1[-1])
 
     fig, ax = plt.subplots(1, 2, figsize=(13, 4.4))
     finals = {}
     for h in HS:
-        u, e = _eval_series(os.path.join(_RD, f"train_quadrotor_bptt_hard_seed0_h{h}.csv"))
+        u, e = _eval_series(os.path.join(DATA_DIR, f"train_quadrotor_bptt_hard_seed0_h{h}.csv"))
         finals[h] = float(e[-1])
         ax[0].plot(u, e, "o-", color=COLORS[h], label=f"V3 h={h}  (h·dt={h*DT:.2f}s)")
     ax[0].axhline(v1_final, ls="--", color="gray", lw=1)
@@ -68,7 +71,7 @@ def main():
     ax[1].set_title("Final eval vs window length\nV3 → V1 as h grows (truncation, not active-set)")
     ax[1].grid(alpha=0.3)
 
-    out = os.path.join(_RD, "quadrotor_v3_h_sweep.png")
+    out = os.path.join(PLOT_DIR, "quadrotor_v3_h_sweep.png")
     fig.tight_layout(); fig.savefig(out, dpi=140)
     print("V1 final eval:", round(v1_final, 2))
     print("V3 final eval by h:", {h: round(finals[h], 2) for h in HS})

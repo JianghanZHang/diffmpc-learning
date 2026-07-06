@@ -134,6 +134,6 @@ Deferred (not measured here):
 
 ## Figures
 
-- `eval_cost_vs_updates.png`: Eval cost vs #updates, mean±std band over 3 seeds (V1 vs V3)
-- `grad_norm_vs_updates.png`: Grad norm vs #updates (log scale), with markers where min_obs_margin > -0.1 (none observed)
-- `closed_loop_traj.png`: x-y trajectories of all final trained policies, with obstacle circle
+- `plot/eval_cost_vs_updates.png`: Eval cost vs #updates, mean±std band over 3 seeds (V1 vs V3)
+- `plot/grad_norm_vs_updates.png`: Grad norm vs #updates (log scale), with markers where min_obs_margin > -0.1 (none observed)
+- `plot/closed_loop_traj.png`: x-y trajectories of all final trained policies, with obstacle circle

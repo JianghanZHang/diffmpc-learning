@@ -5,7 +5,7 @@ import sys
 import jax
 jax.config.update("jax_enable_x64", True)
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # drone_rl/
 
 import jax.numpy as jnp
 import pytest

@@ -4,8 +4,8 @@ Run with:
     cd /home/jianghan/Workspace/diffmpc-learning
     export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
     export XLA_PYTHON_CLIENT_PREALLOCATE=false
-    PYTHONPATH=external/turbompc /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \
-        -m pytest experiments/rl/drone_rl/test_drone_env.py -v -s
+    PYTHONPATH=external/diffmpc2 /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \
+        -m pytest experiments/rl/drone_rl/test/test_drone_env.py -v -s
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import sys
 import os
 
 # Make drone_env importable (same-dir) regardless of pytest import mode / folder location.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # drone_rl/
 
 import jax.numpy as jnp
 import numpy as np
@@ -32,7 +32,7 @@ from turbompc.solvers.turbompc_solver import (
 from turbompc.utils.load_params import load_solver_params
 
 # Import the module under test (same-dir)
-from drone_env import (
+from env.drone_env import (
     NX,
     NU,
     START,

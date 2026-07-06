@@ -41,7 +41,7 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-_TURBOMPC = os.path.join(_REPO_ROOT, "external", "turbompc")
+_TURBOMPC = os.path.join(_REPO_ROOT, "external", "diffmpc2")
 for _p in (_HERE, _SRC, _TURBOMPC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -56,7 +56,7 @@ import jax.numpy as jnp
 # so the existing drone pipeline/tests keep working unchanged. The nonlinear quadrotor
 # (quadrotor_env.py) injects its OWN simulate_step/task_loss/obs_margin via the keyword
 # args on the public update functions below.
-from drone_env import (
+from env.drone_env import (
     obs_margin as _default_obs_margin,
     simulate_step as _default_simulate_step,
     task_loss as _default_task_loss,

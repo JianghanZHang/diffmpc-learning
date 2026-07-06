@@ -13,7 +13,7 @@ Stages (cuDSS env):
 Run::
     export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
     export XLA_PYTHON_CLIENT_PREALLOCATE=false
-    PYTHONPATH=external/turbompc \\
+    PYTHONPATH=external/diffmpc2 \\
       /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \\
       experiments/rl/drone_rl/verify_quadrotor.py
 """
@@ -26,7 +26,7 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-_TURBOMPC = os.path.join(_REPO_ROOT, "external", "turbompc")
+_TURBOMPC = os.path.join(_REPO_ROOT, "external", "diffmpc2")
 for _p in (_HERE, _SRC, _TURBOMPC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -36,8 +36,8 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 
-import quadrotor_env as env
-import drone_env
+from env import quadrotor_env as env
+from env import drone_env
 from mpc_layer import make_hard_layer
 from policy import init_policy, make_theta_to_weights
 from gradient_modes import make_initial_guess, prime_guess, shift_guess, make_shac_window_loss

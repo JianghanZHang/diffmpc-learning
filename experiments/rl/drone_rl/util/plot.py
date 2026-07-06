@@ -1,4 +1,9 @@
-"""Plotting for V1 (plan_hard) vs V3 (bptt_hard) training results.
+"""Shared plotting library for drone_rl (+ the V1-vs-V3 training figures CLI).
+
+ALL drone_rl plotting scripts import their style, palette, data locations, and
+common drawing helpers from this module: INK/MUTED/GRID, ARM_COLORS, apply_style,
+save_fig, end_label, draw_obstacle, draw_start_goal, DATA_DIR (results/data),
+PLOT_DIR (results/plot), and the CSV loaders (_load_variant_seeds & friends).
 
 Generates three figures:
   (a) eval_cost_vs_updates.png  — eval cost vs #updates, mean±std over seeds
@@ -8,9 +13,9 @@ Generates three figures:
                                    for each variant/seed, with obstacle circle
 
 Usage (from repo root):
-    PYTHONPATH=external/turbompc \\
+    PYTHONPATH=external/diffmpc2 \\
         /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \\
-        experiments/rl/drone_rl/plot.py
+        experiments/rl/drone_rl/util/plot.py
 """
 from __future__ import annotations
 
@@ -18,12 +23,13 @@ import os
 import sys
 import glob
 
-# ---- sys.path bootstrap ----
+# ---- sys.path bootstrap (this file lives in drone_rl/util/) ----
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
+_PKG = os.path.dirname(_HERE)                       # drone_rl/
+_REPO_ROOT = os.path.normpath(os.path.join(_PKG, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-_TURBOMPC = os.path.join(_REPO_ROOT, "external", "turbompc")
-for _p in (_HERE, _SRC, _TURBOMPC):
+_TURBOMPC = os.path.join(_REPO_ROOT, "external", "diffmpc2")
+for _p in (_PKG, _SRC, _TURBOMPC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -34,8 +40,69 @@ import matplotlib.patches as mpatches
 import numpy as np
 import csv
 
-_RESULTS_DIR = os.path.join(_HERE, "results")
-os.makedirs(_RESULTS_DIR, exist_ok=True)
+# Canonical result locations: CSV/JSON under results/data, figures under results/plot.
+DATA_DIR = os.path.join(_PKG, "results", "data")
+PLOT_DIR = os.path.join(_PKG, "results", "plot")
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(PLOT_DIR, exist_ok=True)
+_RESULTS_DIR = DATA_DIR   # CSV loading below reads from the data dir
+
+# ---------------------------------------------------------------------------
+# Shared figure style + helpers — ALL drone_rl plotting goes through these.
+# ---------------------------------------------------------------------------
+INK, MUTED, GRID = "#1a1a2e", "#5a5a6e", "#e3e3ea"
+# Categorical palette, fixed slot order (dataviz reference palette, light mode).
+ARM_COLORS = {
+    "plan_hard": "#2a78d6",     # V1
+    "plan_barrier": "#1baf7a",  # V2
+    "bptt_hard": "#eda100",     # V3
+    "bptt_barrier": "#008300",  # V4
+}
+
+
+def apply_style(ax):
+    """House style: white ground, recessive grid, muted spines/ticks."""
+    ax.set_facecolor("white")
+    ax.grid(True, color=GRID, linewidth=0.7, zorder=0)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    for sp in ("left", "bottom"):
+        ax.spines[sp].set_color(MUTED)
+    ax.tick_params(colors=MUTED, labelsize=8.5)
+    return ax
+
+
+def save_fig(fig, name, *, dpi=150):
+    """Save a figure into results/plot/ and return the path."""
+    out = os.path.join(PLOT_DIR, name)
+    fig.savefig(out, dpi=dpi, bbox_inches="tight")
+    print(f"  Saved: {out}")
+    return out
+
+
+def end_label(ax, x, y, text, *, dy=0):
+    """Direct label at the end of a line series."""
+    ax.annotate(text, (x[-1], y[-1]), xytext=(4, dy), textcoords="offset points",
+                fontsize=8, color=INK, fontweight="bold", va="center")
+
+
+def draw_obstacle(ax, center, radius, *, label="obstacle"):
+    """Filled obstacle disk with edge + centered label."""
+    ax.add_patch(plt.Circle(center, radius, facecolor="#f3d9d9",
+                            edgecolor="#b96a6a", linewidth=1.4, zorder=1))
+    if label:
+        ax.annotate(label, center, ha="center", va="center", fontsize=9,
+                    color="#8a4a4a")
+
+
+def draw_start_goal(ax, start_xy, goal_xy):
+    """START square + GOAL star markers with labels."""
+    ax.plot(*start_xy, marker="s", color=INK, ms=7, zorder=6)
+    ax.annotate("START", start_xy, xytext=(8, -12), textcoords="offset points",
+                fontsize=9, color=INK, fontweight="bold")
+    ax.plot(*goal_xy, marker="*", color=INK, ms=13, zorder=6)
+    ax.annotate("GOAL", goal_xy, xytext=(8, 4), textcoords="offset points",
+                fontsize=9, color=INK, fontweight="bold")
 
 # Env-dependent config (set by configure_env). Defaults to the drone for back-compat,
 # but the OLD drone CSVs are named train_{variant}_seed*.csv (no env tag); new runs
@@ -53,10 +120,10 @@ def configure_env(env_name: str):
     global ENV_NAME, ENV_TAG, OBS_C, OBS_R, START_XY, GOAL_XY
     ENV_NAME = env_name
     if env_name == "quadrotor":
-        import quadrotor_env as e
+        from env import quadrotor_env as e
         ENV_TAG = "quadrotor"
     else:
-        import drone_env as e
+        from env import drone_env as e
         ENV_TAG = "drone"
     OBS_C = np.asarray(e.OBS_C)
     OBS_R = float(e.OBS_R)
@@ -268,16 +335,16 @@ def _run_closed_loop_traj(variant: str, seed: int) -> np.ndarray | None:
     jax.config.update("jax_enable_x64", True)
     import jax.numpy as jnp
     if ENV_NAME == "quadrotor":
-        import quadrotor_env as e
+        from env import quadrotor_env as e
     else:
-        import drone_env as e
+        from env import drone_env as e
     build_problem_params, simulate_step, START, QK, RK = (
         e.build_problem_params, e.simulate_step, e.START, e.QK, e.RK)
     from mpc_layer import make_hard_layer
     from policy import make_theta_to_weights
     from gradient_modes import make_initial_guess, prime_guess, shift_guess
 
-    npz_path = os.path.join(_HERE, "trained_policies", f"{_fname_stem(variant)}_seed{seed}_theta.npz")
+    npz_path = os.path.join(_PKG, "trained_policies", f"{_fname_stem(variant)}_seed{seed}_theta.npz")
     if not os.path.exists(npz_path):
         return None
 
@@ -370,27 +437,27 @@ def main():
     print(f"Generating plots for env={ENV_NAME} (tag={ENV_TAG!r}) ...")
 
     fig_a = plot_eval_cost()
-    path_a = os.path.join(_RESULTS_DIR, f"{pre}eval_cost_vs_updates.png")
+    path_a = os.path.join(PLOT_DIR, f"{pre}eval_cost_vs_updates.png")
     fig_a.tight_layout()
     fig_a.savefig(path_a, dpi=150)
     plt.close(fig_a)
     print(f"  Saved: {path_a}")
 
     fig_b = plot_grad_norm()
-    path_b = os.path.join(_RESULTS_DIR, f"{pre}grad_norm_vs_updates.png")
+    path_b = os.path.join(PLOT_DIR, f"{pre}grad_norm_vs_updates.png")
     fig_b.tight_layout()
     fig_b.savefig(path_b, dpi=150)
     plt.close(fig_b)
     print(f"  Saved: {path_b}")
 
     fig_c = plot_trajectories()
-    path_c = os.path.join(_RESULTS_DIR, f"{pre}closed_loop_traj.png")
+    path_c = os.path.join(PLOT_DIR, f"{pre}closed_loop_traj.png")
     fig_c.tight_layout()
     fig_c.savefig(path_c, dpi=150)
     plt.close(fig_c)
     print(f"  Saved: {path_c}")
 
-    print("\nDone. Figures written to:", _RESULTS_DIR)
+    print("\nDone. Figures written to:", PLOT_DIR)
 
 
 if __name__ == "__main__":

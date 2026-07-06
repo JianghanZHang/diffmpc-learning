@@ -19,9 +19,9 @@ Run under the cuDSS env from the repo root::
 
     export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
     export XLA_PYTHON_CLIENT_PREALLOCATE=false
-    PYTHONPATH=external/turbompc \\
+    PYTHONPATH=external/diffmpc2 \\
         /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \\
-        -m pytest experiments/rl/drone_rl/test_gradient_modes.py -v -s
+        -m pytest experiments/rl/drone_rl/test/test_gradient_modes.py -v -s
 """
 from __future__ import annotations
 
@@ -31,10 +31,11 @@ import time
 
 # ---- sys.path bootstrap: same-dir modules + src (diffmpc_learning) ----
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_PKG = os.path.dirname(_HERE)                       # drone_rl/
 # 3 levels up from rl/drone_rl/: rl -> experiments -> repo root
-_REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
+_REPO_ROOT = os.path.normpath(os.path.join(_PKG, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-for _p in (_HERE, _SRC):
+for _p in (_PKG, _SRC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -46,7 +47,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from drone_env import (
+from env.drone_env import (
     NX,
     NU,
     START,

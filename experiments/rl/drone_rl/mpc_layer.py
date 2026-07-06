@@ -35,15 +35,16 @@ import os
 import sys
 
 # ---------------------------------------------------------------------------- #
-# Path bootstrap: ensure src/ (diffmpc_learning) and external/turbompc are on
-# sys.path regardless of whether tests/conftest.py is active (e.g. when this
-# module is imported from a test run with PYTHONPATH=external/turbompc only).
+# Path bootstrap: ensure src/ (diffmpc_learning) and external/diffmpc2 (the
+# CANONICAL solver, branch LogBarrier-ADMM-QP) are on sys.path regardless of
+# whether tests/conftest.py is active (e.g. when this module is imported from
+# a test run with PYTHONPATH=external/diffmpc2 only).
 # ---------------------------------------------------------------------------- #
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # 3 levels up from rl/drone_rl/: rl -> experiments -> repo root
 _REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-_TURBOMPC = os.path.join(_REPO_ROOT, "external", "turbompc")
+_TURBOMPC = os.path.join(_REPO_ROOT, "external", "diffmpc2")
 for _p in (_SRC, _TURBOMPC):
     if _p not in sys.path:
         sys.path.insert(0, _p)

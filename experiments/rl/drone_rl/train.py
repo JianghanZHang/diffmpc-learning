@@ -6,7 +6,7 @@ V3 = bptt_hard : SHAC truncated BPTT over h-step window
 Usage (from repo root, cuDSS env):
     export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
     export XLA_PYTHON_CLIENT_PREALLOCATE=false
-    PYTHONPATH=external/turbompc \\
+    PYTHONPATH=external/diffmpc2 \\
         /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \\
         experiments/rl/drone_rl/train.py
 """
@@ -21,7 +21,7 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-_TURBOMPC = os.path.join(_REPO_ROOT, "external", "turbompc")
+_TURBOMPC = os.path.join(_REPO_ROOT, "external", "diffmpc2")
 for _p in (_HERE, _SRC, _TURBOMPC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -31,7 +31,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 
-import drone_env  # default env (the 6-state linear drone)
+from env import drone_env  # default env (the 6-state linear drone)
 from mpc_layer import make_hard_layer
 from policy import init_policy, make_theta_to_weights
 from optimizer import adam_init
@@ -44,7 +44,7 @@ from gradient_modes import (
 )
 
 # Results directory alongside this file
-_RESULTS_DIR = os.path.join(_HERE, "results")
+_RESULTS_DIR = os.path.join(_HERE, "results", "data")   # CSVs live under results/data
 os.makedirs(_RESULTS_DIR, exist_ok=True)
 # Trained NN policies live in a SEPARATE folder so a results-folder cleanup never deletes them.
 _POLICY_DIR = os.path.join(_HERE, "trained_policies")
@@ -161,6 +161,8 @@ def train(
     eval_every: int = 10,
     eval_steps: int = 25,
     reset_dist: float = 0.1,
+    barrier_glob: str = "filter",
+    time_budget: float = 1200.0,
 ) -> dict:
     """Train the Diff-WMPC policy for the obstacle-avoidance task.
 
@@ -185,9 +187,11 @@ def train(
     Summary dict with timing, first/last train loss, first/last eval cost,
     and final obstacle clearance.
     """
-    assert variant in ("plan_hard", "bptt_hard"), (
-        f"Unknown variant '{variant}'. Must be 'plan_hard' or 'bptt_hard'."
+    assert variant in ("plan_hard", "bptt_hard", "plan_barrier", "bptt_barrier"), (
+        f"Unknown variant '{variant}'. Must be one of plan_hard (V1), bptt_hard (V3), "
+        f"plan_barrier (V2), bptt_barrier (V4)."
     )
+    is_barrier = variant.endswith("_barrier")
 
     # ---- env API ----
     build_problem_params = env.build_problem_params
@@ -206,6 +210,12 @@ def train(
     dyn, pp = build_problem_params()
     layer = make_hard_layer(dyn, pp)
     solver = layer.solver
+    blayer = None
+    if is_barrier:
+        import barrier_modes
+        # V2/V4: canonical diffmpc2 LogBarrier layer (elastic kappa=1e-4/gamma=1e2,
+        # outer-slack FTB+filter globalization), warm-started internally.
+        blayer = barrier_modes.make_barrier_ws_layer(solver, cfg={"globalization": barrier_glob})
 
     rng = jax.random.PRNGKey(seed)
     rng, init_key = jax.random.split(rng)
@@ -216,7 +226,7 @@ def train(
     # ------------------------------------------------------------------ #
     # Episode state
     # ------------------------------------------------------------------ #
-    steps_per_update = n_batch if variant == "plan_hard" else h
+    steps_per_update = n_batch if variant.startswith("plan_") else h
 
     rng, noise_key = jax.random.split(rng)
     x = jax.lax.stop_gradient(sample_x0(noise_key, 0.02))
@@ -227,6 +237,13 @@ def train(
     guess = make_initial_guess(solver, pp, x)
     guess = jax.lax.stop_gradient(prime_guess(solver, t2w, policy, pp, x, guess))
     guess_start = guess
+    barrier_guess_start = None
+    if is_barrier:
+        # Prime the barrier layer's warm-start cell with one concrete solve at START
+        # and cache the shifted solution for episode resets (mirrors guess_start).
+        import barrier_modes  # noqa: F811
+        blayer.solve({**pp, "initial_state": x}, t2w(policy, x))
+        barrier_guess_start = blayer.snapshot()
     ep_step = 0
 
     # ------------------------------------------------------------------ #
@@ -271,6 +288,30 @@ def train(
             #   min = furthest point; max = CLOSEST approach (~0 ⇒ grazing the boundary).
             min_obs_margin = float(jnp.min(logs["obs_margin"]))
             max_obs_margin = float(jnp.max(logs["obs_margin"]))
+        elif variant == "plan_barrier":  # V2
+            import barrier_modes
+            policy, opt_state, x, logs = barrier_modes.open_loop_plan_update_barrier(
+                blayer, t2w, dyn, policy, opt_state, x, pp,
+                n_batch=n_batch, lr=lr,
+                simulate_step=simulate_step, task_loss=task_loss, obs_margin=obs_margin,
+            )
+            train_loss = float(jnp.mean(logs["loss"]))
+            grad_norm = float(logs["accum_grad_norm"])
+            plan_margin = float(jnp.max(logs["plan_obs_margin_max"]))
+            min_obs_margin = float(jnp.min(logs["obs_margin"]))
+            max_obs_margin = float(jnp.max(logs["obs_margin"]))
+        elif variant == "bptt_barrier":  # V4
+            import barrier_modes
+            policy, opt_state, x, logs = barrier_modes.shac_window_update_barrier(
+                blayer, t2w, dyn, policy, opt_state, x, pp,
+                h=h, lr=lr,
+                simulate_step=simulate_step, task_loss=task_loss, obs_margin=obs_margin,
+            )
+            train_loss = float(logs["loss"])
+            grad_norm = float(logs["grad_norm"])
+            plan_margin = float(jnp.max(logs["plan_obs_margin_max"]))
+            min_obs_margin = float(jnp.min(logs["obs_margin"]))
+            max_obs_margin = float(jnp.max(logs["obs_margin"]))
         else:  # bptt_hard
             policy, opt_state, x, guess, logs = shac_window_update(
                 solver, t2w, dyn, policy, opt_state, x, pp, guess,
@@ -301,12 +342,20 @@ def train(
             rng, noise_key = jax.random.split(rng)
             x = jax.lax.stop_gradient(sample_x0(noise_key, 0.02))
             guess = guess_start  # reuse the START-primed warm-start (avoid the cold re-prime)
+            if is_barrier:
+                blayer.reset(barrier_guess_start)
             ep_step = 0
 
         # ---- periodic evaluation ----
         eval_cost = eval_closest_margin = eval_n_grazing = eval_n_violations = None
         if (update_idx + 1) % eval_every == 0:
-            ev = closed_loop_eval(solver, t2w, dyn, policy, pp, env.START, n_steps=eval_steps, env=env)
+            if is_barrier:
+                import barrier_modes
+                ev = barrier_modes.closed_loop_eval_barrier(
+                    blayer, t2w, dyn, policy, pp, env.START, n_steps=eval_steps, env=env)
+            else:
+                ev = closed_loop_eval(solver, t2w, dyn, policy, pp, env.START,
+                                      n_steps=eval_steps, env=env)
             eval_cost = ev["cost"]
             eval_closest_margin = ev["closest_margin"]
             eval_n_grazing = ev["n_grazing"]
@@ -341,13 +390,18 @@ def train(
             "eval_n_grazing": eval_n_grazing,
             "eval_n_violations": eval_n_violations,
         })
+        # Incremental flush: a crash/kill must not lose completed updates.
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=csv_fields)
+            writer.writeheader()
+            writer.writerows(csv_rows)
 
         # ---- bail-out guard: stop early if budget exceeded ----
         elapsed = time.time() - total_t0
-        if elapsed > 1200 and update_idx < n_updates - 1:
+        if elapsed > time_budget and update_idx < n_updates - 1:
             print(
                 f"\n  [TIMEOUT] {elapsed:.0f}s elapsed after {update_idx+1} updates; "
-                f"stopping early (budget ~20 min)."
+                f"stopping early (budget {time_budget:.0f}s)."
             )
             n_updates = update_idx + 1  # update for summary
             break
@@ -399,19 +453,23 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(description="Diff-WMPC hard-box training (drone or quadrotor).")
     ap.add_argument("--env", choices=["drone", "quadrotor"], default="drone")
-    ap.add_argument("--variant", choices=["plan_hard", "bptt_hard"], default="plan_hard")
+    ap.add_argument("--variant",
+                    choices=["plan_hard", "bptt_hard", "plan_barrier", "bptt_barrier"],
+                    default="plan_hard")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n_updates", type=int, default=100)
     ap.add_argument("--n_batch", type=int, default=10)
     ap.add_argument("--h", type=int, default=8)
     ap.add_argument("--lr", type=float, default=3e-3)
+    ap.add_argument("--barrier_glob", default="filter", choices=["filter", "merit", "none"])
+    ap.add_argument("--time_budget", type=float, default=1200.0)
     ap.add_argument("--n_total", type=int, default=40)
     ap.add_argument("--eval_every", type=int, default=10)
     ap.add_argument("--eval_steps", type=int, default=25)
     args = ap.parse_args()
 
     if args.env == "quadrotor":
-        import quadrotor_env as env_mod
+        from env import quadrotor_env as env_mod
     else:
         env_mod = drone_env
 
@@ -419,6 +477,7 @@ if __name__ == "__main__":
         args.variant, seed=args.seed, n_updates=args.n_updates, env=env_mod,
         n_batch=args.n_batch, h=args.h, lr=args.lr,
         n_total=args.n_total, eval_every=args.eval_every, eval_steps=args.eval_steps,
+        barrier_glob=args.barrier_glob, time_budget=args.time_budget,
     )
 
     print("\n" + "=" * 64)
@@ -430,7 +489,8 @@ if __name__ == "__main__":
     print(f"  Train loss first→last:   {result['first_train_loss']:.4f} → {result['last_train_loss']:.4f}")
     first_eval = result['first_eval_cost']
     last_eval = result['last_eval_cost']
-    print(f"  Eval cost first→last:    {first_eval:.4f} → {last_eval:.4f}")
+    if first_eval is not None:
+        print(f"  Eval cost first→last:    {first_eval:.4f} → {last_eval:.4f}")
     print(f"  Final closest margin:    {result['final_closest_margin']:+.4f}  (~0 ⇒ grazing the boundary)")
     print(f"  Final n_grazing / n_viol:{result['final_n_grazing']} / {result['final_n_violations']}")
     learning = (result["last_train_loss"] or 0.0) < (result["first_train_loss"] or float("inf"))

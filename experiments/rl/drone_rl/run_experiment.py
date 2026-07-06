@@ -7,7 +7,7 @@ mean/std of the final eval cost (the common metric) + per-run details.
 Usage (cuDSS env, from repo root)::
     export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
     export XLA_PYTHON_CLIENT_PREALLOCATE=false
-    PYTHONPATH=external/turbompc \\
+    PYTHONPATH=external/diffmpc2 \\
       /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python -u \\
       experiments/rl/drone_rl/run_experiment.py \\
       --env quadrotor --seeds 0 1 2 --n_updates 150
@@ -23,7 +23,7 @@ import argparse
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-_TURBOMPC = os.path.join(_REPO_ROOT, "external", "turbompc")
+_TURBOMPC = os.path.join(_REPO_ROOT, "external", "diffmpc2")
 for _p in (_HERE, _SRC, _TURBOMPC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -31,10 +31,10 @@ for _p in (_HERE, _SRC, _TURBOMPC):
 import numpy as np
 
 import train as train_mod
-import drone_env
-import quadrotor_env
+from env import drone_env
+from env import quadrotor_env
 
-_RESULTS_DIR = os.path.join(_HERE, "results")
+_RESULTS_DIR = os.path.join(_HERE, "results", "data")   # summary JSONs live under results/data
 os.makedirs(_RESULTS_DIR, exist_ok=True)
 
 

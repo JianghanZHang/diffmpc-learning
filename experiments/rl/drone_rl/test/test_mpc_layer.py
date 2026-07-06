@@ -13,9 +13,9 @@ Tests
 Run from repo root:
     export LD_LIBRARY_PATH="$(cat /tmp/cudss071_ldpath.txt):$LD_LIBRARY_PATH"
     export XLA_PYTHON_CLIENT_PREALLOCATE=false
-    PYTHONPATH=external/turbompc \\
+    PYTHONPATH=external/diffmpc2 \\
         /home/jianghan/Workspace/diffmpc2/.venv-cudss/bin/python \\
-        -m pytest experiments/rl/drone_rl/test_mpc_layer.py -v -s
+        -m pytest experiments/rl/drone_rl/test/test_mpc_layer.py -v -s
 """
 from __future__ import annotations
 
@@ -25,10 +25,11 @@ import time
 
 # ---- sys.path bootstrap: same-dir (drone_env, mpc_layer) + src (diffmpc_learning) ----
 _HERE = os.path.dirname(os.path.abspath(__file__))
+_PKG = os.path.dirname(_HERE)                       # drone_rl/
 # 3 levels up from rl/drone_rl/: rl -> experiments -> repo root
-_REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../../"))
+_REPO_ROOT = os.path.normpath(os.path.join(_PKG, "../../../"))
 _SRC = os.path.join(_REPO_ROOT, "src")
-for _p in (_HERE, _SRC):
+for _p in (_PKG, _SRC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -41,7 +42,7 @@ import pytest
 
 from diffmpc_learning.solvers.backward import central_path_nlp_grad, central_path_nlp_solve
 
-from drone_env import (
+from env.drone_env import (
     NX, NU, START, GOAL, OBS_C, OBS_R, HORIZON, QK, RK,
     build_problem_params, task_loss, obs_margin,
 )
