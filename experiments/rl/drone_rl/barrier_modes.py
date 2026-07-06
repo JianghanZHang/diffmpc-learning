@@ -41,6 +41,7 @@ import jax.numpy as jnp
 
 from turbompc.solvers.backward.logbarrier_backward import (  # noqa: E402
     logbarrier_nlp_solve,
+    logbarrier_nlp_solve_jit,
     _relaxed_nlp_backward,
     _build_problem_params_cotangent,
 )
@@ -50,6 +51,10 @@ from optimizer import adam_step  # noqa: E402
 # Verified regime (2026-07-02 gates + globalization probes): elastic barrier
 # kappa=1e-4 / gamma=1e2, filter globalization. Training tolerance matches the
 # hard arms' convention (NLP-KKT 1e-3 for speed; QP/inner tol stays tight).
+# forward="fused" (2026-07-06): WARM solves go through the JITTED fused-CUDA SQP
+# (logbarrier_nlp_solve_jit, full steps, fixed kappa); the COLD solve after each
+# reset stays on the eager globalized path (filter + restoration). "eager" = the
+# pre-07-06 all-eager behavior.
 DEFAULT_LB_CFG = dict(
     target_kappa=1.0e-4,
     slack_weight=1.0e2,
@@ -58,6 +63,7 @@ DEFAULT_LB_CFG = dict(
     max_sqp_iter=15,
     sqp_tol=1.0e-3,
     globalization="filter",
+    forward="fused",
     inner_cfg=dict(
         rho_bar=0.1, sigma=1e-6, rho_f_factor=1000.0, alpha=1.6,
         tol=1e-9, max_iter=5000, check_termination_every=25,
@@ -89,13 +95,24 @@ def make_barrier_ws_layer(solver, cfg=None):
     cfg = {**DEFAULT_LB_CFG, **(cfg or {})}
     cell = {"guess": None, "iters": [], "convs": []}
 
-    def _fwd_solve(pp, w):
+    # JITTED fused-CUDA fast path (warm solves): one compiled call per solve. Closed
+    # over solver/cfg (static); pp/weights/warm-start primals are traced arguments.
+    @jax.jit
+    def _fused_solve_jit(pp, w, states0, controls0):
+        return logbarrier_nlp_solve_jit(
+            solver, pp, w, states0, controls0,
+            slack_weight=cfg["slack_weight"], target_kappa=cfg["target_kappa"],
+            use_slack=cfg["use_slack"], max_sqp_iter=cfg["max_sqp_iter"],
+            sqp_tol=cfg["sqp_tol"], inner_cfg=cfg["inner_cfg"])
+
+    def _eager_solve(pp, w):
+        """Eager globalized solve (filter + restoration) — cold starts + fallback."""
         orig_ig = solver.program.initial_guess
         if cell["guess"] is not None:
             g = cell["guess"]
             solver.program.initial_guess = lambda params=None: g
         try:
-            res = logbarrier_nlp_solve(
+            return logbarrier_nlp_solve(
                 solver, pp, w,
                 slack_weight=cfg["slack_weight"], target_kappa=cfg["target_kappa"],
                 use_slack=cfg["use_slack"], max_sqp_iter=cfg["max_sqp_iter"],
@@ -103,6 +120,19 @@ def make_barrier_ws_layer(solver, cfg=None):
                 inner_cfg=cfg["inner_cfg"])
         finally:
             solver.program.initial_guess = orig_ig
+
+    def _fwd_solve(pp, w):
+        if cfg["forward"] == "fused" and cell["guess"] is not None:
+            states0, controls0 = cell["guess"]
+            sol = _fused_solve_jit(pp, w, states0, controls0)
+            res = {
+                "states": sol.states, "controls": sol.controls,
+                "num_iter": int(sol.num_iter), "final_conv": float(sol.final_conv),
+                "kappas": jnp.asarray([cfg["target_kappa"]]),
+                "y_f_dyn": sol.y_f_dyn, "y_g_stacked": sol.y_g_stacked,
+            }
+        else:
+            res = _eager_solve(pp, w)
         cell["guess"] = _shift_primal(res["states"], res["controls"])
         cell["iters"].append(int(res["num_iter"]))
         cell["convs"].append(float(res["final_conv"]))
@@ -119,12 +149,14 @@ def make_barrier_ws_layer(solver, cfg=None):
                     problem_params, weights, res["y_f_dyn"], res["y_g_stacked"])
         return (res["states"], res["controls"]), residual
 
-    def solve_bwd(residual, cot):
-        d_states, d_controls = cot
-        (states_c, controls_c, final_kappa, problem_params, weights,
-         y_f_dyn_c, y_g_stacked_c) = residual
+    # JITTED backward (needs yg_crosscheck_tol=None — the concrete crosscheck is
+    # skipped, trace-safe since the 2026-07-06 solver-side guard). Returns arrays only
+    # (info carries a string and is not jit-returnable).
+    @jax.jit
+    def _bwd_jit(pp, w, states_c, controls_c, final_kappa, d_states, d_controls,
+                 y_f_dyn_c, y_g_stacked_c):
         dL_dweights, dL_dx_init, _info = _relaxed_nlp_backward(
-            solver, problem_params, weights, states_c, controls_c, final_kappa,
+            solver, pp, w, states_c, controls_c, final_kappa,
             d_states, d_controls,
             slack_weight=cfg["slack_weight"], use_slack=cfg["use_slack"],
             include_ineq_hessian=cfg["include_ineq_hessian"],
@@ -133,6 +165,15 @@ def make_barrier_ws_layer(solver, cfg=None):
             # at states_c for W/ineq-Hessian (cached duals can be O(10%) off on grazing
             # steps and the strict crosscheck assert would abort mid-run).
             yg_mode="analytic", yg_crosscheck_tol=None)
+        return dL_dweights, dL_dx_init
+
+    def solve_bwd(residual, cot):
+        d_states, d_controls = cot
+        (states_c, controls_c, final_kappa, problem_params, weights,
+         y_f_dyn_c, y_g_stacked_c) = residual
+        dL_dweights, dL_dx_init = _bwd_jit(
+            problem_params, weights, states_c, controls_c, final_kappa,
+            d_states, d_controls, y_f_dyn_c, y_g_stacked_c)
         problem_params_cotangent = _build_problem_params_cotangent(
             solver, problem_params, dL_dx_init)
         return (problem_params_cotangent, dL_dweights)

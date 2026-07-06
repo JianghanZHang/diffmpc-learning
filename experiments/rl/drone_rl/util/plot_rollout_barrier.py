@@ -81,7 +81,7 @@ def main():
                  rollout_hard(load_policy("train_quadrotor_plan_hard_seed0_theta.npz"),
                               t2w, dyn, pp)))
     print("rollout V2 (barrier)...")
-    arms.append(("V2 barrier-plan (final, destabilized)", ARM_COLORS["plan_barrier"],
+    arms.append(("V2 barrier-plan (lr 3e-3)", ARM_COLORS["plan_barrier"],
                  rollout_barrier(load_policy("train_quadrotor_plan_barrier_seed0_theta.npz"),
                                  t2w, dyn, pp)))
     print("rollout V4 (barrier)...")

@@ -22,7 +22,7 @@ from util.plot import (  # noqa: E402
 
 ARMS = [
     ("V1 hard-plan",        "train_quadrotor_plan_hard_seed0.csv",     ARM_COLORS["plan_hard"]),
-    ("V2 barrier-plan",     "train_quadrotor_plan_barrier_seed0.csv",  ARM_COLORS["plan_barrier"]),
+    ("V2 barrier-plan (lr 3e-3)", "train_quadrotor_plan_barrier_seed0.csv", ARM_COLORS["plan_barrier"]),
     ("V3 hard-BPTT h24",    "train_quadrotor_bptt_hard_h24_seed0.csv", ARM_COLORS["bptt_hard"]),
     ("V4 barrier-BPTT h24", "train_quadrotor_bptt_barrier_seed0.csv",  ARM_COLORS["bptt_barrier"]),
 ]

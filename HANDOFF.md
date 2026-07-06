@@ -315,6 +315,55 @@ observation was an artifact — the flag wasn't plumbed; never actually A/B'd in
   construction), re-eval barrier-trained weights under the HARD deploy controller, V2@lr=3e-3,
   multi-seed. CSVs: `results/train_quadrotor_{plan,bptt}_barrier_seed0.csv`; policies saved.
 
+## ✅ UPDATE 2026-07-06 — fused CUDA logbarrier WIRED into training (jitted SQP driver); gates PASSED
+
+**Discovery.** Barrier training was ~50–100× slower than the hard arms purely from EAGER dispatch,
+not math: `barrier_modes` ran the eager `logbarrier_nlp_solve` Python SQP (~7 s/warm solve vs the
+jitted hard solver's 0.9 s at the SAME 5–7 SQP iters ⇒ V2 ≈ 127 s/update, V4@h24 ≈ 353 s/update).
+The fused inner solve exists (`AdmmBackend.LOGBARRIER_CUDSS`, one `jax.ffi` call/QP), **but
+`ForwardBackend.ADMM_LOGBARRIER_CUDSS` through `TurboMPCSolver.solve` does NOT work**: the fused
+branch (`admm.py:774-848`) returns the ONE-SIDED `(N+1, 2m)` ADMM state while `_solve_impl`'s
+while_loop carry starts from the two-sided `initial_state` `(N+1, m)` — pytree shape mismatch at
+trace time (the suite only ever exercised the QP-level wrapper with backend 6).
+
+**What was built (this session):**
+- **`logbarrier_nlp_solve_jit`** (`turbompc/solvers/backward/logbarrier_backward.py`): a
+  `lax.while_loop` port of the eager loop's hot path — full Newton steps (no globalization),
+  fixed κ, fused-CUDA inner solve via an `ADMMSolver(admm_backend=LOGBARRIER_CUDSS, kappa=κ)`,
+  IDENTICAL NLP-KKT conv check (analytic slack `−y/γ`, `_conv_check_qp`). Returns the fixed-shape
+  `LogBarrierJitSolution` incl. the cached duals (`y_f_dyn`, one-sided `y_g_stacked`) the backward
+  needs. Docstring: cold/infeasible starts belong to the eager globalized solve.
+- **Trace-safety guard** in `_relaxed_nlp_backward`: the concrete `float()`/assert/global y_g
+  crosscheck runs only when `yg_crosscheck_tol is not None` → the whole backward is now
+  `jax.jit`-able (with `yg_mode="analytic"`, tol=None).
+- **Layer** (`experiments/rl/drone_rl/barrier_modes.py`): `DEFAULT_LB_CFG["forward"]="fused"` —
+  COLD solve (cell empty, once per reset/eval) → eager filter+restoration; WARM solves → jitted
+  `logbarrier_nlp_solve_jit`; backward → jitted `_relaxed_nlp_backward` wrapper. `train.py` gained
+  `--barrier_forward {fused,eager}`.
+- **Suite gates** (`test_logbarrier_admm_qp.py`, now 29 tests): `test_jit_forward_matches_eager_warm`
+  (elastic+pure: jit 6 iters conv 2.2e-07, states rel-linf 3e-09 vs eager filter) and
+  `test_jit_backward_matches_eager` (jit≡eager to 5.5e-17).
+
+**Gates on the QUADROTOR training problem (measured, scratchpad/fused_gates.py):**
+- **(a) forward parity/convergence, 12-step warm training stream:** identical SQP iteration counts
+  and conv values vs the eager filter path at BOTH tols — tol 1e-3: 3–5 iters, max states rel-linf
+  1.0e-05; tol 1e-6: 5–8 iters, max rel-linf 6.1e-08; jit conv < tol every step. Warm fused solve
+  **0.095 s** (steady) vs eager 8.4 s at tol 1e-3 (~90×/solve).
+- **(b) AD-vs-FD through the fused layer (eps ladder 1e-3/3e-4/1e-4, sqp_tol=1e-6):**
+  dL/dweights over ALL 17 entries: 0 flagged, **cos=1.000000, rel=2.0e-04**; dL/dx0 (positions):
+  **cos=1.000000, rel=2.1e-05**.
+- **Smoke train (V2-style, n_batch=10): 2.0–2.7 s/update vs 127 s eager (~55×)**, first update
+  ~23 s (cold eager solve + jit compile).
+
+**Ops note / data incident:** the env/ package reorg changed `env.__name__` →
+`train.py`'s `env_tag` became `env.quadrotor`, so the eager lr=3e-3 retrain wrote
+`train_env.quadrotor_*.csv`, which a fused smoke run then overwrote. Recovered all 59 eager
+updates from the run log → `results/data/train_quadrotor_plan_barrier_seed0_lr3e-3_eager_partial.csv`;
+`env_tag` fixed to the module basename. (lr=1e-2 archive `..._lr1e-2.csv` intact.)
+
+The eager V2 lr=3e-3 retrain was killed at update 59 (user decision) and relaunched on the fused
+path (100 updates, same seed/config).
+
 ## ⏭️ NEXT TASK — barrier V2/V4 on the GRAZING quadrotor + write-up
 
 1. **Hard-vs-barrier (V2/V4) — now testable.** The quadrotor's realized trajectory GRAZES (real

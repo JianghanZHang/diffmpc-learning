@@ -162,6 +162,7 @@ def train(
     eval_steps: int = 25,
     reset_dist: float = 0.1,
     barrier_glob: str = "filter",
+    barrier_forward: str = "fused",
     time_budget: float = 1200.0,
 ) -> dict:
     """Train the Diff-WMPC policy for the obstacle-avoidance task.
@@ -215,7 +216,8 @@ def train(
         import barrier_modes
         # V2/V4: canonical diffmpc2 LogBarrier layer (elastic kappa=1e-4/gamma=1e2,
         # outer-slack FTB+filter globalization), warm-started internally.
-        blayer = barrier_modes.make_barrier_ws_layer(solver, cfg={"globalization": barrier_glob})
+        blayer = barrier_modes.make_barrier_ws_layer(
+            solver, cfg={"globalization": barrier_glob, "forward": barrier_forward})
 
     rng = jax.random.PRNGKey(seed)
     rng, init_key = jax.random.split(rng)
@@ -249,7 +251,8 @@ def train(
     # ------------------------------------------------------------------ #
     # CSV / bookkeeping
     # ------------------------------------------------------------------ #
-    env_tag = env.__name__.replace("_env", "")
+    # basename only: after the env/ package reorg __name__ is "env.quadrotor_env"
+    env_tag = env.__name__.split(".")[-1].replace("_env", "")
     csv_path = os.path.join(_RESULTS_DIR, f"train_{env_tag}_{variant}_seed{seed}.csv")
     csv_fields = [
         "update", "train_loss_mean", "grad_norm",
@@ -462,6 +465,7 @@ if __name__ == "__main__":
     ap.add_argument("--h", type=int, default=8)
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--barrier_glob", default="filter", choices=["filter", "merit", "none"])
+    ap.add_argument("--barrier_forward", default="fused", choices=["fused", "eager"])
     ap.add_argument("--time_budget", type=float, default=1200.0)
     ap.add_argument("--n_total", type=int, default=40)
     ap.add_argument("--eval_every", type=int, default=10)
@@ -477,7 +481,8 @@ if __name__ == "__main__":
         args.variant, seed=args.seed, n_updates=args.n_updates, env=env_mod,
         n_batch=args.n_batch, h=args.h, lr=args.lr,
         n_total=args.n_total, eval_every=args.eval_every, eval_steps=args.eval_steps,
-        barrier_glob=args.barrier_glob, time_budget=args.time_budget,
+        barrier_glob=args.barrier_glob, barrier_forward=args.barrier_forward,
+        time_budget=args.time_budget,
     )
 
     print("\n" + "=" * 64)
