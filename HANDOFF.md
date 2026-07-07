@@ -403,15 +403,30 @@ rel=3.5e-5, 0 flagged.
   - **BPTT-compounding hypothesis REFUTED at the final θ**: window-grad-norm h-sweep
     (h=1..24, window pinned at margin +4e-5 from h≥8): pure ≤ 7.6 at h=24 — bounded, no
     geometric growth (elastic: 12.5). The pinned window per se does NOT reproduce the 2e4 spikes.
-  - **Surviving candidate (identified, NOT yet causally confirmed): sign-flip/unbounded W on
-    tolerance-level pinned rows.** `relaxed_complementarity_weight`'s pure branch divides by the
-    UNCLIPPED clearance `s = h−G₁x` (`logbarrier_backward.py:93-94`); at sqp_tol=1e-3 a pinned
-    row's converged clearance can cross 0, giving a huge NEGATIVE W → indefinite D_aug →
-    arbitrary adjoint. Matches the intermittent-spike pattern (rare updates, not persistent).
-    Verification: rerun V4p logging per-solve min-s and correlate spikes with s≤0 events.
-    Candidate fix: floor the pure backward's s (e.g. s ≥ √(κ/γ_cap), giving pure the cap
-    structure elastic gets for free) — a solver-repo change, gate before use.
-  Follow-ups: spike-replay verification + s-floor fix; V4p lr sweep; multi-seed for all arms.
+  - **2026-07-07 mechanism hunt (scratchpad/w_mode_gate.py) — two more candidates
+    REFUTED, one fix gated in:**
+    - Clearance crossings are FREQUENT, not rare: at sqp_tol=1e-3 the plan's min raw one-sided
+      clearance goes NEGATIVE (−2e-5..−2e-4) on 8/14 solves along the pinned trajectory (the
+      2nd-order Taylor remainder of g over the truncated final SQP step; exactly zero for
+      LINEAR rows, relatively huge on pinned curved rows because it divides by s~κ/y).
+    - **Sign-flip-W catastrophe REFUTED**: on a crossed row the analytic dual's 1e-30 clip makes
+      y=1e26, so |W| is astronomical either sign and the adjoint's 1/W→0 — the row degenerates
+      to a benign hard equality. Measured at a crossing state: uncapped gradient vs tight
+      (1e-6) reference cos=+0.999992.
+    - **Dual-only W (W=y²/κ from cached retraction duals; user-proposed, implemented as
+      `w_from_dual`) REFUTED at training tol**: point-grad cos=+0.50 / rel=1.8 vs reference
+      (cached-dual staleness on grazing rows ≫ clearance-form error). Passes at 1e-6
+      (cos=1.000000) — fixed-point equivalence holds; kept as a non-default option.
+    - **Adopted fix: W cap** (`w_cap`, layer default 1e8 for pure; crossed rows mapped to
+      hard-active W=cap): the hard-active limit saturates by W~1e6, while the clip-driven
+      |W|~1e26..1e56 only adds f64-cancellation risk against O(1..1e2) curvature in the same
+      LDLᵀ factorization — the LEADING (unconfirmed) hypothesis for the intermittent ~2e4
+      spikes. GATED: crossing-state capped vs tight ref cos=+0.999995 (point) / +0.999999
+      (window h=4); AD-vs-FD at 1e-6 cos=1.000000 (0 flagged).
+    - Causal test IN FLIGHT: V4p retrain with capped-W backward (uncapped CSV/policy archived
+      as `*_uncappedW*`) — spikes gone + plateau resolved ⇒ confirmed; unchanged ⇒ the spike
+      mechanism is still open (next: per-update spike replay with W/λ logging).
+  Follow-ups: V4p lr sweep; multi-seed for all arms.
 - Figures: `results/plot/quadrotor_v2_v4_training_curves.png` + `quadrotor_rollout_v2_v4.png` now
   carry all 6 arms (dashed = pure).
 

@@ -64,6 +64,17 @@ DEFAULT_LB_CFG = dict(
     sqp_tol=1.0e-3,
     globalization="filter",
     forward="fused",
+    # Backward dual/W sourcing. BOTH modes: analytic dual + clearance-W (gated: at
+    # sqp_tol=1e-3 crossing states, cos=0.999988 vs the tight reference; the cached
+    # dual-W alternative measured WORSE there — cos 0.50 point / 0.988 window,
+    # 2026-07-07 w_mode_gate). bwd_w_cap (pure only): clamp the fold weight to
+    # [0, cap] — the 1e-30 clearance clip otherwise drives |W| to ~1e26..1e56 on
+    # tolerance-level crossed rows (frequent: 8/14 solves), which saturates the same
+    # hard-active limit as W~1e6 but risks f64 cancellation in the reduced KKT
+    # (leading hypothesis for V4p's intermittent ~2e4 grad spikes).
+    bwd_yg_mode="analytic",
+    bwd_w_from_dual=False,
+    bwd_w_cap="auto",        # "auto": 1e8 for pure, no cap for elastic (W <= gamma); None = no cap
     inner_cfg=dict(
         rho_bar=0.1, sigma=1e-6, rho_f_factor=1000.0, alpha=1.6,
         tol=1e-9, max_iter=5000, check_termination_every=25,
@@ -93,6 +104,8 @@ def make_barrier_ws_layer(solver, cfg=None):
     ``layer.restore(snap)``.
     """
     cfg = {**DEFAULT_LB_CFG, **(cfg or {})}
+    if cfg["bwd_w_cap"] == "auto":
+        cfg["bwd_w_cap"] = 1.0e8 if not cfg["use_slack"] else None
     cell = {"guess": None, "iters": [], "convs": []}
 
     # JITTED fused-CUDA fast path (warm solves): one compiled call per solve. Closed
@@ -161,10 +174,11 @@ def make_barrier_ws_layer(solver, cfg=None):
             slack_weight=cfg["slack_weight"], use_slack=cfg["use_slack"],
             include_ineq_hessian=cfg["include_ineq_hessian"],
             y_f_dyn_c=y_f_dyn_c, y_g_stacked_c=y_g_stacked_c,
-            # Training tolerance (sqp_tol~1e-3): use the exact closed-form barrier dual
-            # at states_c for W/ineq-Hessian (cached duals can be O(10%) off on grazing
-            # steps and the strict crosscheck assert would abort mid-run).
-            yg_mode="analytic", yg_crosscheck_tol=None)
+            # Analytic dual + clearance-W (gated best at training tol); pure mode
+            # additionally caps the fold weight (see DEFAULT_LB_CFG). Crosscheck
+            # disabled at training tolerance (the strict assert would abort mid-run).
+            yg_mode=cfg["bwd_yg_mode"], yg_crosscheck_tol=None,
+            w_from_dual=cfg["bwd_w_from_dual"], w_cap=cfg["bwd_w_cap"])
         return dL_dweights, dL_dx_init
 
     def solve_bwd(residual, cot):
