@@ -423,9 +423,28 @@ rel=3.5e-5, 0 flagged.
       LDLᵀ factorization — the LEADING (unconfirmed) hypothesis for the intermittent ~2e4
       spikes. GATED: crossing-state capped vs tight ref cos=+0.999995 (point) / +0.999999
       (window h=4); AD-vs-FD at 1e-6 cos=1.000000 (0 flagged).
-    - Causal test IN FLIGHT: V4p retrain with capped-W backward (uncapped CSV/policy archived
-      as `*_uncappedW*`) — spikes gone + plateau resolved ⇒ confirmed; unchanged ⇒ the spike
-      mechanism is still open (next: per-update spike replay with W/λ logging).
+    - W-cap causal test: spikes PERSISTED under the clamp (1.6e2/1.6e3 by upd 29; run
+      OOM-killed at upd 65, plateau ~58) ⇒ **f64-cancellation hypothesis REFUTED too.**
+  **✅ ROOT CAUSE FOUND 2026-07-07 (instrumented run): SILENT NON-CONVERGENCE of the fused
+  forward.** train.py now logs per-update `fwd_conv_max/fwd_iters_max/fwd_n_nonconv` from the
+  layer's (previously discarded) per-solve stats + checkpoints θ/x on grad>100. Census over 36
+  updates (smooth-backward config): **every elevated-grad update (all 14) had solves that hit
+  the 15-iteration cap and exited UNCONVERGED** (conv up to 4.6e-1 = 460× tol, silently); the
+  22 clean updates: all solves conv < tol, max grad 26.5. Spikes ⊆ non-converged updates
+  (necessary, not sufficient — most non-converged updates only add moderate noise; the tail is
+  8.8e2+). Mechanism: the fused training loop is full-step/un-globalized with an UNCHECKED cap
+  exit; on hard (post-reset, coolest-warm-start) instances pure-barrier Newton needs
+  globalization; the backward then differentiates a NON-solution — garbage in, tidy garbage
+  out. Not the barrier's math, not the landscape, not the backward: termination discipline
+  (cf. Frey2025's "termination criterion of the SQP method needs to be adjusted" + their
+  standing assumption "the solver converged to w*").
+  **Fix (barrier_modes, gated by construction + run in flight):** (1) fused cap 15→40
+  (`fused_max_sqp_iter`; while_loop exits early so easy solves cost nothing); (2) RESCUE:
+  `final_conv > sqp_tol` after the jitted solve → re-solve eagerly (filter+restoration,
+  60-iter budget) from the same warm cell; `cell["n_rescues"]` counts. Validation run
+  (rescued, instrumented, smooth backward) IN FLIGHT — expect n_nonconv effects gone, spikes
+  gone; unrescued-smooth partial CSV archived as `*_smooth_norescue_partial.csv`, spike
+  checkpoint `trained_policies/spike_*_upd35.npz` kept for replay.
   Follow-ups: V4p lr sweep; multi-seed for all arms.
 - Figures: `results/plot/quadrotor_v2_v4_training_curves.png` + `quadrotor_rollout_v2_v4.png` now
   carry all 6 arms (dashed = pure).

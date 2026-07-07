@@ -64,6 +64,11 @@ DEFAULT_LB_CFG = dict(
     sqp_tol=1.0e-3,
     globalization="filter",
     forward="fused",
+    # Fused-loop iteration budget (jit while_loop exits early when converged, so a
+    # larger cap only costs time on the hard instances that need it) and the eager
+    # rescue's budget (filter+restoration, used when the fused solve exits unconverged).
+    fused_max_sqp_iter=40,
+    rescue_max_sqp_iter=60,
     # Backward dual/W sourcing. BOTH modes: analytic dual + clearance-W (gated: at
     # sqp_tol=1e-3 crossing states, cos=0.999988 vs the tight reference; the cached
     # dual-W alternative measured WORSE there — cos 0.50 point / 0.988 window,
@@ -123,10 +128,10 @@ def make_barrier_ws_layer(solver, cfg=None):
         return logbarrier_nlp_solve_jit(
             solver, pp, w, states0, controls0,
             slack_weight=cfg["slack_weight"], target_kappa=cfg["target_kappa"],
-            use_slack=cfg["use_slack"], max_sqp_iter=cfg["max_sqp_iter"],
+            use_slack=cfg["use_slack"], max_sqp_iter=cfg["fused_max_sqp_iter"],
             sqp_tol=cfg["sqp_tol"], inner_cfg=cfg["inner_cfg"])
 
-    def _eager_solve(pp, w):
+    def _eager_solve(pp, w, max_sqp_iter=None):
         """Eager globalized solve (filter + restoration) — cold starts + fallback."""
         orig_ig = solver.program.initial_guess
         if cell["guess"] is not None:
@@ -136,7 +141,8 @@ def make_barrier_ws_layer(solver, cfg=None):
             return logbarrier_nlp_solve(
                 solver, pp, w,
                 slack_weight=cfg["slack_weight"], target_kappa=cfg["target_kappa"],
-                use_slack=cfg["use_slack"], max_sqp_iter=cfg["max_sqp_iter"],
+                use_slack=cfg["use_slack"],
+                max_sqp_iter=max_sqp_iter or cfg["max_sqp_iter"],
                 sqp_tol=cfg["sqp_tol"], globalization=cfg["globalization"],
                 inner_cfg=cfg["inner_cfg"])
         finally:
@@ -152,6 +158,16 @@ def make_barrier_ws_layer(solver, cfg=None):
                 "kappas": jnp.asarray([cfg["target_kappa"]]),
                 "y_f_dyn": sol.y_f_dyn, "y_g_stacked": sol.y_g_stacked,
             }
+            # RESCUE non-converged fused solves (2026-07-07): the jitted loop is
+            # full-step/un-globalized and capped; on hard (post-reset) instances it
+            # can exit at the cap with conv >> tol, and the backward then
+            # differentiates a NON-solution -> garbage gradients (measured: every
+            # V4p grad spike coincided with iters_max=15 / conv up to 4.6e-1;
+            # clean updates all conv < tol). The eager filter+restoration solve
+            # (warm-started from the same cell guess) is the globalized fallback.
+            if res["final_conv"] > cfg["sqp_tol"]:
+                cell["n_rescues"] = cell.get("n_rescues", 0) + 1
+                res = _eager_solve(pp, w, max_sqp_iter=cfg["rescue_max_sqp_iter"])
         else:
             res = _eager_solve(pp, w)
         cell["guess"] = _shift_primal(res["states"], res["controls"])

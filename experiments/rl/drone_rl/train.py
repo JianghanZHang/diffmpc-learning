@@ -265,6 +265,8 @@ def train(
         "update", "train_loss_mean", "grad_norm",
         "min_obs_margin", "max_obs_margin", "plan_margin_max", "wall_clock_s", "ep_step",
         "eval_cost", "eval_closest_margin", "eval_n_grazing", "eval_n_violations",
+        # barrier arms: per-update forward-solve health (silent-non-convergence probe)
+        "fwd_conv_max", "fwd_iters_max", "fwd_n_nonconv",
     ]
     csv_rows: list[dict] = []
 
@@ -337,6 +339,27 @@ def train(
             min_obs_margin = float(jnp.min(logs["obs_margin"]))
             max_obs_margin = float(jnp.max(logs["obs_margin"]))
 
+        # ---- forward-solve health (barrier arms): SILENT non-convergence check.
+        # The jitted fused loop exits at conv < sqp_tol OR the iteration cap — the
+        # second branch returns an unconverged point with no error. Correlating
+        # these per-update maxima with grad spikes tests the non-convergence
+        # hypothesis for V4p's ~1e2..2e4 spikes (2026-07-07).
+        fwd_conv_max, fwd_iters_max, fwd_n_nonconv = "", "", ""
+        if is_barrier:
+            b_iters, b_convs = blayer.pop_stats()
+            if b_convs:
+                fwd_conv_max = max(b_convs)
+                fwd_iters_max = max(b_iters)
+                fwd_n_nonconv = sum(1 for c in b_convs if c > blayer.cfg["sqp_tol"])
+        if is_barrier and grad_norm > 100.0:
+            spike_path = os.path.join(
+                _POLICY_DIR, f"spike_{env_tag}_{file_variant}_upd{update_idx+1}.npz")
+            np.savez(spike_path, x=np.asarray(x),
+                     **{k: np.asarray(v) for k, v in policy.items()})
+            print(f"  [SPIKE] upd {update_idx+1}: grad={grad_norm:.3e} "
+                  f"fwd_conv_max={fwd_conv_max} fwd_iters_max={fwd_iters_max} "
+                  f"n_nonconv={fwd_n_nonconv} -> {os.path.basename(spike_path)}")
+
         wall_t = time.time() - t0
         if update_idx > 0:  # exclude first (JIT compile) update from mean
             update_times.append(wall_t)
@@ -399,6 +422,9 @@ def train(
             "eval_closest_margin": eval_closest_margin,
             "eval_n_grazing": eval_n_grazing,
             "eval_n_violations": eval_n_violations,
+            "fwd_conv_max": fwd_conv_max,
+            "fwd_iters_max": fwd_iters_max,
+            "fwd_n_nonconv": fwd_n_nonconv,
         })
         # Incremental flush: a crash/kill must not lose completed updates.
         with open(csv_path, "w", newline="") as f:
