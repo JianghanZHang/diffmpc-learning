@@ -52,11 +52,15 @@ _RESULTS_DIR = DATA_DIR   # CSV loading below reads from the data dir
 # ---------------------------------------------------------------------------
 INK, MUTED, GRID = "#1a1a2e", "#5a5a6e", "#e3e3ea"
 # Categorical palette, fixed slot order (dataviz reference palette, light mode).
+# Color follows the arm FAMILY; barrier MODE (elastic vs pure) is encoded by
+# linestyle in the plot scripts (solid = elastic, dashed = pure), not by hue.
 ARM_COLORS = {
-    "plan_hard": "#2a78d6",     # V1
-    "plan_barrier": "#1baf7a",  # V2
-    "bptt_hard": "#eda100",     # V3
-    "bptt_barrier": "#008300",  # V4
+    "plan_hard": "#2a78d6",          # V1
+    "plan_barrier": "#1baf7a",       # V2 (elastic)
+    "bptt_hard": "#eda100",          # V3
+    "bptt_barrier": "#008300",       # V4 (elastic)
+    "plan_barrier_pure": "#1baf7a",  # V2 pure — same family hue, dashed
+    "bptt_barrier_pure": "#008300",  # V4 pure — same family hue, dashed
 }
 
 

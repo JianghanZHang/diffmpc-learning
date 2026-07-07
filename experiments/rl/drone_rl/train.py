@@ -163,6 +163,7 @@ def train(
     reset_dist: float = 0.1,
     barrier_glob: str = "filter",
     barrier_forward: str = "fused",
+    barrier_mode: str = "elastic",
     time_budget: float = 1200.0,
 ) -> dict:
     """Train the Diff-WMPC policy for the obstacle-avoidance task.
@@ -217,7 +218,11 @@ def train(
         # V2/V4: canonical diffmpc2 LogBarrier layer (elastic kappa=1e-4/gamma=1e2,
         # outer-slack FTB+filter globalization), warm-started internally.
         blayer = barrier_modes.make_barrier_ws_layer(
-            solver, cfg={"globalization": barrier_glob, "forward": barrier_forward})
+            solver, cfg={"globalization": barrier_glob, "forward": barrier_forward,
+                         # pure barrier: no elastic slack — the Moreau-envelope-style
+                         # relaxation biases the fixed point by xi=y/gamma (exploitable);
+                         # pure keeps iterates strictly feasible, bias O(kappa).
+                         "use_slack": barrier_mode == "elastic"})
 
     rng = jax.random.PRNGKey(seed)
     rng, init_key = jax.random.split(rng)
@@ -253,7 +258,9 @@ def train(
     # ------------------------------------------------------------------ #
     # basename only: after the env/ package reorg __name__ is "env.quadrotor_env"
     env_tag = env.__name__.split(".")[-1].replace("_env", "")
-    csv_path = os.path.join(_RESULTS_DIR, f"train_{env_tag}_{variant}_seed{seed}.csv")
+    # pure-barrier runs get their own files; elastic keeps the historical names
+    file_variant = variant + ("_pure" if (is_barrier and barrier_mode == "pure") else "")
+    csv_path = os.path.join(_RESULTS_DIR, f"train_{env_tag}_{file_variant}_seed{seed}.csv")
     csv_fields = [
         "update", "train_loss_mean", "grad_norm",
         "min_obs_margin", "max_obs_margin", "plan_margin_max", "wall_clock_s", "ep_step",
@@ -418,7 +425,7 @@ def train(
         writer.writerows(csv_rows)
     print(f"\nCSV saved: {csv_path}")
 
-    npz_path = os.path.join(_POLICY_DIR, f"train_{env_tag}_{variant}_seed{seed}_theta.npz")
+    npz_path = os.path.join(_POLICY_DIR, f"train_{env_tag}_{file_variant}_seed{seed}_theta.npz")
     np.savez(npz_path, **{k: np.array(v) for k, v in policy.items()})
     print(f"Policy saved: {npz_path}")
 
@@ -466,6 +473,7 @@ if __name__ == "__main__":
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--barrier_glob", default="filter", choices=["filter", "merit", "none"])
     ap.add_argument("--barrier_forward", default="fused", choices=["fused", "eager"])
+    ap.add_argument("--barrier_mode", default="elastic", choices=["elastic", "pure"])
     ap.add_argument("--time_budget", type=float, default=1200.0)
     ap.add_argument("--n_total", type=int, default=40)
     ap.add_argument("--eval_every", type=int, default=10)
@@ -482,7 +490,7 @@ if __name__ == "__main__":
         n_batch=args.n_batch, h=args.h, lr=args.lr,
         n_total=args.n_total, eval_every=args.eval_every, eval_steps=args.eval_steps,
         barrier_glob=args.barrier_glob, barrier_forward=args.barrier_forward,
-        time_budget=args.time_budget,
+        barrier_mode=args.barrier_mode, time_budget=args.time_budget,
     )
 
     print("\n" + "=" * 64)

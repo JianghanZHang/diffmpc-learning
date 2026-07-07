@@ -20,11 +20,17 @@ from util.plot import (  # noqa: E402
     DATA_DIR, INK, MUTED, ARM_COLORS, apply_style, save_fig, end_label,
 )
 
+# (label, csv, color, linestyle) — solid = hard / elastic-barrier, dashed = PURE barrier.
+# Pure entries are skipped silently until their runs produce CSVs.
 ARMS = [
-    ("V1 hard-plan",        "train_quadrotor_plan_hard_seed0.csv",     ARM_COLORS["plan_hard"]),
-    ("V2 barrier-plan (lr 3e-3)", "train_quadrotor_plan_barrier_seed0.csv", ARM_COLORS["plan_barrier"]),
-    ("V3 hard-BPTT h24",    "train_quadrotor_bptt_hard_h24_seed0.csv", ARM_COLORS["bptt_hard"]),
-    ("V4 barrier-BPTT h24", "train_quadrotor_bptt_barrier_seed0.csv",  ARM_COLORS["bptt_barrier"]),
+    ("V1 hard-plan",        "train_quadrotor_plan_hard_seed0.csv",     ARM_COLORS["plan_hard"], "-"),
+    ("V2 barrier-plan (lr 3e-3)", "train_quadrotor_plan_barrier_seed0.csv", ARM_COLORS["plan_barrier"], "-"),
+    ("V3 hard-BPTT h24",    "train_quadrotor_bptt_hard_h24_seed0.csv", ARM_COLORS["bptt_hard"], "-"),
+    ("V4 barrier-BPTT h24", "train_quadrotor_bptt_barrier_seed0.csv",  ARM_COLORS["bptt_barrier"], "-"),
+    ("V2p PURE barrier-plan", "train_quadrotor_plan_barrier_pure_seed0.csv",
+     ARM_COLORS["plan_barrier_pure"], "--"),
+    ("V4p PURE barrier-BPTT h24", "train_quadrotor_bptt_barrier_pure_seed0.csv",
+     ARM_COLORS["bptt_barrier_pure"], "--"),
 ]
 
 
@@ -40,8 +46,11 @@ def load(fname):
 
 
 def main():
-    data = {name: load(f) for name, f, _ in ARMS}
-    colors = {name: c for name, _, c in ARMS}
+    have = [(n, f, c, ls) for n, f, c, ls in ARMS
+            if os.path.exists(os.path.join(DATA_DIR, f))]
+    data = {name: load(f) for name, f, _, _ in have}
+    colors = {name: c for name, _, c, _ in have}
+    styles = {name: ls for name, _, _, ls in have}
 
     fig, axes = plt.subplots(2, 2, figsize=(11.5, 7.6), dpi=150)
     fig.patch.set_facecolor("white")
@@ -51,7 +60,7 @@ def main():
     ax = axes[0, 0]
     for name, d in data.items():
         ax.plot(d["ev_u"], d["ev_c"], color=colors[name], lw=1.8, marker="o",
-                ms=3.5, zorder=3)
+                ms=3.5, zorder=3, ls=styles[name])
         end_label(ax, d["ev_u"], d["ev_c"], name.split()[0])
     ax.set_title("Closed-loop eval cost (35 steps from START)", fontsize=10,
                  color=INK, loc="left")
@@ -60,7 +69,7 @@ def main():
     ax = axes[0, 1]
     for name, d in data.items():
         ax.plot(d["upd"], np.maximum(d["loss"], 1e-3), color=colors[name], lw=1.2,
-                alpha=0.85, zorder=3)
+                alpha=0.85, zorder=3, ls=styles[name])
     ax.set_yscale("log")
     ax.set_title("Train loss per update (log)", fontsize=10, color=INK, loc="left")
     ax.set_xlabel("update", fontsize=9, color=MUTED)
@@ -72,7 +81,7 @@ def main():
                 textcoords="offset points", fontsize=8, color=MUTED)
     for name, d in data.items():
         ax.plot(d["ev_u"], d["ev_m"], color=colors[name], lw=1.8, marker="o",
-                ms=3.5, zorder=3)
+                ms=3.5, zorder=3, ls=styles[name])
         end_label(ax, d["ev_u"], d["ev_m"], name.split()[0])
     ax.set_title("Eval closest approach to obstacle (margin)", fontsize=10,
                  color=INK, loc="left")
@@ -81,15 +90,16 @@ def main():
     ax = axes[1, 1]
     for name, d in data.items():
         ax.plot(d["upd"], np.maximum(d["gnorm"], 1e-4), color=colors[name], lw=1.2,
-                alpha=0.85, zorder=3)
+                alpha=0.85, zorder=3, ls=styles[name])
     ax.set_yscale("log")
     ax.set_title("Gradient norm per update (log)", fontsize=10, color=INK, loc="left")
     ax.set_xlabel("update", fontsize=9, color=MUTED)
 
-    handles = [plt.Line2D([], [], color=colors[n], lw=2.2, label=n) for n in data]
-    fig.legend(handles=handles, loc="upper center", ncol=4, frameon=False,
+    handles = [plt.Line2D([], [], color=colors[n], lw=2.2, ls=styles[n], label=n)
+               for n in data]
+    fig.legend(handles=handles, loc="upper center", ncol=3, frameon=False,
                fontsize=9, bbox_to_anchor=(0.5, 1.0))
-    fig.suptitle("Diff-WMPC on the grazing quadrotor — hard vs elastic-barrier arms (seed 0)",
+    fig.suptitle("Diff-WMPC on the grazing quadrotor — hard vs barrier (elastic / PURE) arms (seed 0)",
                  fontsize=11.5, color=INK, y=1.045, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     save_fig(fig, "quadrotor_v2_v4_training_curves.png")

@@ -58,9 +58,9 @@ def rollout_hard(policy, t2w, dyn, pp):
     return np.stack(xs)
 
 
-def rollout_barrier(policy, t2w, dyn, pp):
+def rollout_barrier(policy, t2w, dyn, pp, use_slack=True):
     solver = make_hard_layer(dyn, pp).solver
-    lay = barrier_modes.make_barrier_ws_layer(solver)
+    lay = barrier_modes.make_barrier_ws_layer(solver, cfg={"use_slack": use_slack})
     x = jnp.array(env.START)
     xs = [np.asarray(x)]
     for _ in range(N_STEPS):
@@ -88,6 +88,14 @@ def main():
     arms.append(("V4 barrier-BPTT h24", ARM_COLORS["bptt_barrier"],
                  rollout_barrier(load_policy("train_quadrotor_bptt_barrier_seed0_theta.npz"),
                                  t2w, dyn, pp)))
+    print("rollout V2p (PURE barrier)...")
+    arms.append(("V2p PURE barrier-plan", ARM_COLORS["plan_barrier_pure"],
+                 rollout_barrier(load_policy("train_quadrotor_plan_barrier_pure_seed0_theta.npz"),
+                                 t2w, dyn, pp, use_slack=False)))
+    print("rollout V4p (PURE barrier)...")
+    arms.append(("V4p PURE barrier-BPTT h24", ARM_COLORS["bptt_barrier_pure"],
+                 rollout_barrier(load_policy("train_quadrotor_bptt_barrier_pure_seed0_theta.npz"),
+                                 t2w, dyn, pp, use_slack=False)))
 
     obs_c, obs_r = np.asarray(env.OBS_C), float(env.OBS_R)
     fig, ax = plt.subplots(figsize=(9.2, 6.4), dpi=150)
@@ -97,7 +105,8 @@ def main():
 
     for name, color, xs in arms:
         p = xs[:, :2]
-        ax.plot(p[:, 0], p[:, 1], color=color, lw=1.9, zorder=3)
+        ls = "--" if "PURE" in name else "-"
+        ax.plot(p[:, 0], p[:, 1], color=color, lw=1.9, zorder=3, ls=ls)
         ax.plot(p[:, 0], p[:, 1], "o", color=color, ms=2.6, zorder=4)
         inside = np.linalg.norm(p - obs_c, axis=1) < obs_r
         if inside.any():
@@ -110,7 +119,8 @@ def main():
 
     draw_start_goal(ax, np.asarray(env.START)[:2], np.asarray(env.GOAL)[:2])
 
-    handles = [plt.Line2D([], [], color=c, lw=2.2, label=n) for n, c, _ in arms]
+    handles = [plt.Line2D([], [], color=c, lw=2.2, ls="--" if "PURE" in n else "-",
+                          label=n) for n, c, _ in arms]
     handles.append(plt.Line2D([], [], marker="o", mfc="none", mec="#e34948",
                               ls="none", ms=6, label="step inside obstacle"))
     ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8.5)

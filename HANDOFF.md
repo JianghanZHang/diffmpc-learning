@@ -362,7 +362,42 @@ updates from the run log → `results/data/train_quadrotor_plan_barrier_seed0_lr
 `env_tag` fixed to the module basename. (lr=1e-2 archive `..._lr1e-2.csv` intact.)
 
 The eager V2 lr=3e-3 retrain was killed at update 59 (user decision) and relaunched on the fused
-path (100 updates, same seed/config).
+path (100 updates, same seed/config): **NO late-run destabilization at lr=3e-3** (eval 48.3→31.2
+monotone through upd 100; grad ≤ ~1.3 vs the lr=1e-2 collapse to eval 56–59 / grad 183), and it
+tracked the killed eager run to 4–5 significant digits at every shared eval milestone (end-to-end
+training-parity check for the fused path). Elastic-sag exploit persisted: margin +0.04→+0.16.
+
+## ✅ UPDATE 2026-07-06 (2) — PURE barrier arms: the exploit is the RELAXATION, not the estimator
+
+**Motivation (user):** the elastic slack is a Moreau-envelope-style relaxation ON the
+inequalities — it moves the fixed point itself by ξ=y/γ per active row, so gradients are gradients
+of the relaxed problem, and the bias GROWS with the duals (the exploitable channel). Pure barrier
+(`use_slack=False`) bias is O(κ) and not dual-exploitable: s=κ/y shrinks toward the boundary FROM
+INSIDE, so the margin saturates at 0⁻ instead of crossing.
+
+**Wiring:** `train.py --barrier_mode {elastic,pure}` → layer `use_slack`; pure runs write
+`train_quadrotor_{plan,bptt}_barrier_pure_seed0.{csv,_theta.npz}` (elastic files kept).
+
+**Gates (quadrotor, BOTH passed before training):** pure COLD eager solve converges 10–13 iters
+via filter+restoration (default initial guess is obstacle-infeasible — pure NEEDS the eager cold
+path); warm jitted parity identical to the eager filter path (rel ≤ 6.4e-7, 0.08 s/solve steady);
+AD-vs-FD through the pure fused layer: weights cos=1.000000 rel=1.2e-4, x0 cos=1.000000
+rel=3.5e-5, 0 flagged.
+
+**Results (seed 0, eval = 35-step closed loop from START; fused path):**
+- **V2p (plan, lr 3e-3, 100 upd, 25.6 s/upd): eval 50.1→32.72 — lands ON hard V1's 32.7.** Margin
+  pinned |m| ≤ 5e-4 at EVERY eval (vs elastic V2's +0.04→+0.16 creep), ≤ 2/35 violations of
+  O(1e-4) depth (κ-scale grazing, not sag). ⇒ **elastic V2's sub-hard eval cost (31.2) does NOT
+  survive removing the relaxation: the 07-05 exploit hypothesis is CONFIRMED by intervention** —
+  the elastic arms' apparent advantage over hard was purchased by penetration.
+- **V4p (BPTT h=24, lr 3e-3, 95 upd, 72.6 s/upd): eval 61.2→42.1 PLATEAU** (dips to ~37.3 at upd
+  50 then drifts up) — WORSE than V2p/hard. Margin pinned ~0, ≤ 2 violations. **Measured: V4p's
+  gradient norms spike to ~2e4** (all other arms stay ≤ ~50). Hypothesis (unverified): at the
+  pinned boundary the pure fixed point's feedback derivative is near-hard (W=y/s with s~κ/y tiny)
+  and 24-step BPTT compounds it → stiff/spiky landscape that lr=3e-3 cannot descend. Follow-ups:
+  V4p lr sweep / grad clipping / larger κ; multi-seed for all arms.
+- Figures: `results/plot/quadrotor_v2_v4_training_curves.png` + `quadrotor_rollout_v2_v4.png` now
+  carry all 6 arms (dashed = pure).
 
 ## ⏭️ NEXT TASK — barrier V2/V4 on the GRAZING quadrotor + write-up
 
