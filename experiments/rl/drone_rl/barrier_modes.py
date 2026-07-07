@@ -78,13 +78,16 @@ DEFAULT_LB_CFG = dict(
     # hard-active limit as W~1e6 but risks f64 cancellation in the reduced KKT
     # (leading hypothesis for V4p's intermittent ~2e4 grad spikes).
     bwd_yg_mode="analytic",
-    bwd_w_from_dual=False,
-    bwd_w_cap="auto",           # "auto": None (superseded by smoothing); explicit float = hard clamp
-    # Pure-mode smoothed backward slack (user-proposed 2026-07-07): re-apply the barrier
-    # retraction fresh at states_c = the elastic closed form with gamma_eff. Strictly
-    # positive s (floor sqrt(kappa/g_eff)=1e-6), W <= gamma_eff, C-inf through
-    # crossings, -> exact pure backward as gamma_eff -> inf.
-    bwd_pure_smooth_gamma="auto",   # "auto": 1e8 for pure, None for elastic
+    # Pure default = "Case 1" (user, gated 2026-07-07 5-way): reconstruct y = kappa/s_raw
+    # at states_c and fold W = y^2/kappa — zero knobs, exact manifold identities wherever
+    # s_raw > 0, sign-safe on tolerance-level crossings (the square keeps W positive; the
+    # crossing rows degenerate to the benign hard-equality limit). Gate: cos +0.99967 vs
+    # the tight reference at the worst crossing state, indistinguishable from the
+    # smoothed/clamped variants. The CACHED-dual variant ("Case 2") re-failed the same
+    # gate (cos 0.52): the forward dual is anchored one linearization back.
+    bwd_w_from_dual="auto",     # "auto": True for pure (Case 1), False for elastic
+    bwd_w_cap=None,             # optional hard clamp on W (off)
+    bwd_pure_smooth_gamma=None,  # optional retraction smoothing (off; gated equivalent)
     inner_cfg=dict(
         rho_bar=0.1, sigma=1e-6, rho_f_factor=1000.0, alpha=1.6,
         tol=1e-9, max_iter=5000, check_termination_every=25,
@@ -114,10 +117,11 @@ def make_barrier_ws_layer(solver, cfg=None):
     ``layer.restore(snap)``.
     """
     cfg = {**DEFAULT_LB_CFG, **(cfg or {})}
+    if cfg["bwd_w_from_dual"] == "auto":
+        cfg["bwd_w_from_dual"] = not cfg["use_slack"]     # Case 1 for pure
     if cfg["bwd_pure_smooth_gamma"] == "auto":
         cfg["bwd_pure_smooth_gamma"] = 1.0e8 if not cfg["use_slack"] else None
     if cfg["bwd_w_cap"] == "auto":
-        # the smoothed slack already bounds W at gamma_eff; a hard clamp is redundant
         cfg["bwd_w_cap"] = None
     cell = {"guess": None, "iters": [], "convs": []}
 
