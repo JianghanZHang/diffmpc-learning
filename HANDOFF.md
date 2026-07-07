@@ -392,10 +392,26 @@ rel=3.5e-5, 0 flagged.
   the elastic arms' apparent advantage over hard was purchased by penetration.
 - **V4p (BPTT h=24, lr 3e-3, 95 upd, 72.6 s/upd): eval 61.2→42.1 PLATEAU** (dips to ~37.3 at upd
   50 then drifts up) — WORSE than V2p/hard. Margin pinned ~0, ≤ 2 violations. **Measured: V4p's
-  gradient norms spike to ~2e4** (all other arms stay ≤ ~50). Hypothesis (unverified): at the
-  pinned boundary the pure fixed point's feedback derivative is near-hard (W=y/s with s~κ/y tiny)
-  and 24-step BPTT compounds it → stiff/spiky landscape that lr=3e-3 cannot descend. Follow-ups:
-  V4p lr sweep / grad clipping / larger κ; multi-seed for all arms.
+  gradient norms spike to ~2e4** (all other arms stay ≤ ~50).
+  **Probe 2026-07-07 (`scratchpad/v4p_grad_blowup_probe.py`, final V4p θ, pinned closed-loop
+  state):**
+  - W-cap asymmetry CONFIRMED: elastic max W = 99.7 ≈ γ (algebraic cap `W = y/(s+y/γ) < γ`;
+    elastic s is floored at √(κ/γ) = 1e-3); pure W UNBOUNDED — at the pinned state the analytic
+    dual's clip fired (`min s ≤ 1e-30`, i.e. a real one-sided row AT/PAST the boundary at the
+    converged plan; max y = κ/s = 1e26 clip artifact).
+  - Per-step feedback gain ‖∂u₀*/∂x₀‖₂ = 1043 (pure) vs 83 (elastic) — 12.6× (hard-contact limit).
+  - **BPTT-compounding hypothesis REFUTED at the final θ**: window-grad-norm h-sweep
+    (h=1..24, window pinned at margin +4e-5 from h≥8): pure ≤ 7.6 at h=24 — bounded, no
+    geometric growth (elastic: 12.5). The pinned window per se does NOT reproduce the 2e4 spikes.
+  - **Surviving candidate (identified, NOT yet causally confirmed): sign-flip/unbounded W on
+    tolerance-level pinned rows.** `relaxed_complementarity_weight`'s pure branch divides by the
+    UNCLIPPED clearance `s = h−G₁x` (`logbarrier_backward.py:93-94`); at sqp_tol=1e-3 a pinned
+    row's converged clearance can cross 0, giving a huge NEGATIVE W → indefinite D_aug →
+    arbitrary adjoint. Matches the intermittent-spike pattern (rare updates, not persistent).
+    Verification: rerun V4p logging per-solve min-s and correlate spikes with s≤0 events.
+    Candidate fix: floor the pure backward's s (e.g. s ≥ √(κ/γ_cap), giving pure the cap
+    structure elastic gets for free) — a solver-repo change, gate before use.
+  Follow-ups: spike-replay verification + s-floor fix; V4p lr sweep; multi-seed for all arms.
 - Figures: `results/plot/quadrotor_v2_v4_training_curves.png` + `quadrotor_rollout_v2_v4.png` now
   carry all 6 arms (dashed = pure).
 
