@@ -74,7 +74,12 @@ DEFAULT_LB_CFG = dict(
     # (leading hypothesis for V4p's intermittent ~2e4 grad spikes).
     bwd_yg_mode="analytic",
     bwd_w_from_dual=False,
-    bwd_w_cap="auto",        # "auto": 1e8 for pure, no cap for elastic (W <= gamma); None = no cap
+    bwd_w_cap="auto",           # "auto": None (superseded by smoothing); explicit float = hard clamp
+    # Pure-mode smoothed backward slack (user-proposed 2026-07-07): re-apply the barrier
+    # retraction fresh at states_c = the elastic closed form with gamma_eff. Strictly
+    # positive s (floor sqrt(kappa/g_eff)=1e-6), W <= gamma_eff, C-inf through
+    # crossings, -> exact pure backward as gamma_eff -> inf.
+    bwd_pure_smooth_gamma="auto",   # "auto": 1e8 for pure, None for elastic
     inner_cfg=dict(
         rho_bar=0.1, sigma=1e-6, rho_f_factor=1000.0, alpha=1.6,
         tol=1e-9, max_iter=5000, check_termination_every=25,
@@ -104,8 +109,11 @@ def make_barrier_ws_layer(solver, cfg=None):
     ``layer.restore(snap)``.
     """
     cfg = {**DEFAULT_LB_CFG, **(cfg or {})}
+    if cfg["bwd_pure_smooth_gamma"] == "auto":
+        cfg["bwd_pure_smooth_gamma"] = 1.0e8 if not cfg["use_slack"] else None
     if cfg["bwd_w_cap"] == "auto":
-        cfg["bwd_w_cap"] = 1.0e8 if not cfg["use_slack"] else None
+        # the smoothed slack already bounds W at gamma_eff; a hard clamp is redundant
+        cfg["bwd_w_cap"] = None
     cell = {"guess": None, "iters": [], "convs": []}
 
     # JITTED fused-CUDA fast path (warm solves): one compiled call per solve. Closed
@@ -178,7 +186,8 @@ def make_barrier_ws_layer(solver, cfg=None):
             # additionally caps the fold weight (see DEFAULT_LB_CFG). Crosscheck
             # disabled at training tolerance (the strict assert would abort mid-run).
             yg_mode=cfg["bwd_yg_mode"], yg_crosscheck_tol=None,
-            w_from_dual=cfg["bwd_w_from_dual"], w_cap=cfg["bwd_w_cap"])
+            w_from_dual=cfg["bwd_w_from_dual"], w_cap=cfg["bwd_w_cap"],
+            pure_gamma_smooth=cfg["bwd_pure_smooth_gamma"])
         return dL_dweights, dL_dx_init
 
     def solve_bwd(residual, cot):
