@@ -349,9 +349,18 @@ pushed; solver `1881c9b`→`ca8cebc`, main `14115d2`):
    fixes the scaled-G×physical-x frame bug. Gated by rescale-INVARIANCE of the physical gradient:
    interior/smooth cos=1.000000 (rel 1.6e-4/4.2e-6) + AD=FD; grazing cos 0.9994 (few-% from
    convergence-point sensitivity, not a frame bug). No-op for rescale=False.
-   **Racing still needs**: the EAGER cold-start forward (`logbarrier_nlp_solve`, used post-reset)
-   given the same inner-primal unscale (the user's absent eager fix); and a racing env module under
-   `env/`. Untracked solver test `test_turbompc_x0_sensitivity.py` left for deliberate commit.
+6. **Cold path folded into the lifted loop — eager filter+restoration no longer needed.** Tested
+   (`scratchpad/lifted_coldstart.py`): from the DEEPLY infeasible cold default guess (14/26 stages
+   inside the obstacle) the lifted loop converges to the eager filter+restoration solution (rel
+   1e-5 @ tol 1e-3 / 1e-7 @ 1e-6; 15 / 47 iters) — the IPM carried slack subsumes what
+   filter+restoration existed for. `barrier_modes._fwd_solve` now routes the COLD case (empty
+   warm-start cell, e.g. eval's `reset(None)`) through the lifted loop seeded from
+   `program.initial_guess`, not the eager path (kept only under explicit `forward="eager"`). Smoke:
+   eval cold→lifted gives eval_cost 46.76, matching the old eager-cold path to ~1e-4.
+   **⇒ This CLOSES the racing rescale gap**: the cold path now inherits the lifted loop's rescale
+   wiring automatically, so the whole barrier forward (cold + warm) is rescale-ready through the
+   single jitted path. **Racing now only needs a racing env module under `env/`.**
+   Untracked solver test `test_turbompc_x0_sensitivity.py` left for deliberate commit.
 
 ## ✅ UPDATE 2026-07-06 — fused CUDA logbarrier WIRED into training (jitted SQP driver); gates PASSED
 

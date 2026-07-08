@@ -181,8 +181,18 @@ def make_barrier_ws_layer(solver, cfg=None):
             solver.program.initial_guess = orig_ig
 
     def _fwd_solve(pp, w):
-        if cfg["forward"] == "fused" and cell["guess"] is not None:
-            states0, controls0 = cell["guess"]
+        if cfg["forward"] == "fused":
+            if cell["guess"] is not None:
+                states0, controls0 = cell["guess"]        # warm: shifted prev solution
+            else:
+                # COLD (post-reset / eval start): seed the lifted loop from the
+                # solver's default guess. The lifted IPM handles the infeasible cold
+                # start natively — carried slack starts interior, infeasibility parks
+                # in the graded r+s residual (verified 2026-07-08: from 14/26 stages
+                # inside the obstacle it converges to the eager filter+restoration
+                # solution, rel 1e-5/1e-7). So NO eager filter path is needed here.
+                pp_w = solver.make_params_with_weights(w, pp)
+                states0, controls0 = solver.program.initial_guess(pp_w)
             sol = _fused_solve_jit(pp, w, states0, controls0)
             res = {
                 "states": sol.states, "controls": sol.controls,
@@ -192,12 +202,7 @@ def make_barrier_ws_layer(solver, cfg=None):
                 # lifted smoothed-KKT residuals (0/inf-free floats for the stats)
                 "rs_res": float(sol.rs_res), "comp_rel": float(sol.comp_rel),
             }
-            # No rescue (user decision 2026-07-07): the fused loop is globalized
-            # in-jit (relaxed-barrier merit LS, cap 40) — non-convergence is
-            # expected not to occur; per-solve final_conv stays recorded in the
-            # cell stats and surfaced per update by train.py (fwd_conv_max /
-            # fwd_n_nonconv), so any residual failure is visible, not silent.
-        else:
+        else:  # forward="eager" — legacy all-eager path (filter + restoration)
             res = _eager_solve(pp, w)
         cell["guess"] = _shift_primal(res["states"], res["controls"])
         cell["iters"].append(int(res["num_iter"]))
