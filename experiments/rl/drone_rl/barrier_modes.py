@@ -68,6 +68,16 @@ DEFAULT_LB_CFG = dict(
     # larger cap only costs time on the hard instances that need it). The fused loop
     # is globalized in-jit (relaxed-barrier merit LS) — no rescue path.
     fused_max_sqp_iter=40,
+    # Barrier-consistent termination (user 2026-07-08): exit on the SMOOTHED NLP's
+    # KKT residual — stationarity + equality (as before; already barrier-consistent)
+    # PLUS the third block, the central-path residual ||s o y − kappa||_inf/kappa
+    # (kappa-relative — the block's natural scale is kappa, an absolute tol would be
+    # scale-blind). comp_rel <= tol_comp < 1 forces s o y > 0, i.e. STRICT domain
+    # membership at every accepted point — all dual reconstructions well-posed.
+    # This is the y_g crosscheck quantity, promoted from post-hoc assert to
+    # termination criterion. "auto": "smoothed" for pure, "hard" (legacy) for elastic.
+    fwd_conv_check="auto",
+    fwd_comp_tol_rel=0.5,
     # Backward dual/W sourcing. BOTH modes: analytic dual + clearance-W (gated: at
     # sqp_tol=1e-3 crossing states, cos=0.999988 vs the tight reference; the cached
     # dual-W alternative measured WORSE there — cos 0.50 point / 0.988 window,
@@ -128,6 +138,8 @@ def make_barrier_ws_layer(solver, cfg=None):
         cfg["bwd_pure_smooth_gamma"] = 1.0e8 if not cfg["use_slack"] else None
     if cfg["bwd_w_cap"] == "auto":
         cfg["bwd_w_cap"] = None
+    if cfg["fwd_conv_check"] == "auto":
+        cfg["fwd_conv_check"] = "smoothed" if not cfg["use_slack"] else "hard"
     cell = {"guess": None, "iters": [], "convs": []}
 
     # JITTED fused-CUDA fast path (warm solves): one compiled call per solve. Closed
@@ -138,7 +150,8 @@ def make_barrier_ws_layer(solver, cfg=None):
             solver, pp, w, states0, controls0,
             slack_weight=cfg["slack_weight"], target_kappa=cfg["target_kappa"],
             use_slack=cfg["use_slack"], max_sqp_iter=cfg["fused_max_sqp_iter"],
-            sqp_tol=cfg["sqp_tol"], inner_cfg=cfg["inner_cfg"])
+            sqp_tol=cfg["sqp_tol"], inner_cfg=cfg["inner_cfg"],
+            conv_check=cfg["fwd_conv_check"], comp_tol_rel=cfg["fwd_comp_tol_rel"])
 
     def _eager_solve(pp, w, max_sqp_iter=None):
         """Eager globalized solve (filter + restoration) — cold starts + fallback."""

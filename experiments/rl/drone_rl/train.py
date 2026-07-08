@@ -164,6 +164,7 @@ def train(
     barrier_glob: str = "filter",
     barrier_forward: str = "fused",
     barrier_mode: str = "elastic",
+    barrier_bwd: str = "default",
     time_budget: float = 1200.0,
 ) -> dict:
     """Train the Diff-WMPC policy for the obstacle-avoidance task.
@@ -217,8 +218,14 @@ def train(
         import barrier_modes
         # V2/V4: canonical diffmpc2 LogBarrier layer (elastic kappa=1e-4/gamma=1e2,
         # outer-slack FTB+filter globalization), warm-started internally.
+        _bwd_over = {}
+        if barrier_bwd == "case1":
+            _bwd_over = {"bwd_w_from_dual": True, "bwd_pure_smooth_gamma": None}
+        elif barrier_bwd == "smooth":
+            _bwd_over = {"bwd_w_from_dual": False, "bwd_pure_smooth_gamma": 1e8}
         blayer = barrier_modes.make_barrier_ws_layer(
-            solver, cfg={"globalization": barrier_glob, "forward": barrier_forward,
+            solver, cfg={**_bwd_over,
+                         "globalization": barrier_glob, "forward": barrier_forward,
                          # pure barrier: no elastic slack — the Moreau-envelope-style
                          # relaxation biases the fixed point by xi=y/gamma (exploitable);
                          # pure keeps iterates strictly feasible, bias O(kappa).
@@ -504,6 +511,7 @@ if __name__ == "__main__":
     ap.add_argument("--barrier_glob", default="filter", choices=["filter", "merit", "none"])
     ap.add_argument("--barrier_forward", default="fused", choices=["fused", "eager"])
     ap.add_argument("--barrier_mode", default="elastic", choices=["elastic", "pure"])
+    ap.add_argument("--barrier_bwd", default="default", choices=["default", "smooth", "case1"])
     ap.add_argument("--time_budget", type=float, default=1200.0)
     ap.add_argument("--n_total", type=int, default=40)
     ap.add_argument("--eval_every", type=int, default=10)
@@ -520,7 +528,8 @@ if __name__ == "__main__":
         n_batch=args.n_batch, h=args.h, lr=args.lr,
         n_total=args.n_total, eval_every=args.eval_every, eval_steps=args.eval_steps,
         barrier_glob=args.barrier_glob, barrier_forward=args.barrier_forward,
-        barrier_mode=args.barrier_mode, time_budget=args.time_budget,
+        barrier_mode=args.barrier_mode, barrier_bwd=args.barrier_bwd,
+        time_budget=args.time_budget,
     )
 
     print("\n" + "=" * 64)
