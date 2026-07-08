@@ -103,6 +103,13 @@ DEFAULT_LB_CFG = dict(
     bwd_w_from_dual="auto",       # "auto": False (Case-1 demoted after the upd-8 spike)
     bwd_w_cap="auto",             # "auto": off
     bwd_pure_smooth_gamma="auto",  # "auto": 1e8 for pure (bounded W + bounded Hessian dual)
+    # Regularized sensitivities (Log_Barrier_ADMM.pdf §4.7): Levenberg–Marquardt on
+    # the reduced adjoint. sigma_x damps the sensitivity magnitude (adds sigma_x*I to
+    # the primal Hessian block — stabilizes a near-singular/indefinite reduced Hessian,
+    # e.g. on under-converged hard windows); sigma_f softens the tangent-feasibility
+    # equality (nonzero routes through a dense solve). Both 0 = exact unregularized.
+    bwd_sigma_x=0.0,
+    bwd_sigma_f=0.0,
     inner_cfg=dict(
         rho_bar=0.1, sigma=1e-6, rho_f_factor=1000.0, alpha=1.6,
         tol=1e-9, max_iter=5000, check_termination_every=25,
@@ -239,7 +246,8 @@ def make_barrier_ws_layer(solver, cfg=None):
             # disabled at training tolerance (the strict assert would abort mid-run).
             yg_mode=cfg["bwd_yg_mode"], yg_crosscheck_tol=None,
             w_from_dual=cfg["bwd_w_from_dual"], w_cap=cfg["bwd_w_cap"],
-            pure_gamma_smooth=cfg["bwd_pure_smooth_gamma"])
+            pure_gamma_smooth=cfg["bwd_pure_smooth_gamma"],
+            sigma_x=cfg["bwd_sigma_x"], sigma_f=cfg["bwd_sigma_f"])
         return dL_dweights, dL_dx_init
 
     def solve_bwd(residual, cot):
