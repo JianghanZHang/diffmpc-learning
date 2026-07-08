@@ -78,6 +78,12 @@ DEFAULT_LB_CFG = dict(
     # termination criterion. "auto": "smoothed" for pure, "hard" (legacy) for elastic.
     fwd_conv_check="auto",
     fwd_comp_tol_rel=0.5,
+    # LIFTED fused loop (user 2026-07-08): outer slack s carried as an interior
+    # iterate (FTB) + Armijo on the lifted l1 merit + four-residual smoothed-KKT
+    # exit — the IPM-correct treatment; tolerance-level curvature re-crossings cost
+    # a graded residual instead of an unsatisfiable domain demand (which produced
+    # the 40-cap bursts under fwd_conv_check="smoothed"). "auto": True for pure.
+    fwd_lifted="auto",
     # Backward dual/W sourcing. BOTH modes: analytic dual + clearance-W (gated: at
     # sqp_tol=1e-3 crossing states, cos=0.999988 vs the tight reference; the cached
     # dual-W alternative measured WORSE there — cos 0.50 point / 0.988 window,
@@ -138,7 +144,10 @@ def make_barrier_ws_layer(solver, cfg=None):
         cfg["bwd_pure_smooth_gamma"] = 1.0e8 if not cfg["use_slack"] else None
     if cfg["bwd_w_cap"] == "auto":
         cfg["bwd_w_cap"] = None
+    if cfg["fwd_lifted"] == "auto":
+        cfg["fwd_lifted"] = not cfg["use_slack"]
     if cfg["fwd_conv_check"] == "auto":
+        # non-lifted fallback semantics; the lifted loop has its own composite check
         cfg["fwd_conv_check"] = "smoothed" if not cfg["use_slack"] else "hard"
     cell = {"guess": None, "iters": [], "convs": []}
 
@@ -151,7 +160,8 @@ def make_barrier_ws_layer(solver, cfg=None):
             slack_weight=cfg["slack_weight"], target_kappa=cfg["target_kappa"],
             use_slack=cfg["use_slack"], max_sqp_iter=cfg["fused_max_sqp_iter"],
             sqp_tol=cfg["sqp_tol"], inner_cfg=cfg["inner_cfg"],
-            conv_check=cfg["fwd_conv_check"], comp_tol_rel=cfg["fwd_comp_tol_rel"])
+            conv_check=cfg["fwd_conv_check"], comp_tol_rel=cfg["fwd_comp_tol_rel"],
+            lifted=cfg["fwd_lifted"])
 
     def _eager_solve(pp, w, max_sqp_iter=None):
         """Eager globalized solve (filter + restoration) — cold starts + fallback."""

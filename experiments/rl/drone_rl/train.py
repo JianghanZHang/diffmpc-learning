@@ -358,6 +358,7 @@ def train(
                 fwd_conv_max = max(b_convs)
                 fwd_iters_max = max(b_iters)
                 fwd_n_nonconv = sum(1 for c in b_convs if c > blayer.cfg["sqp_tol"])
+                print(f"    fwd iters/solve: {b_iters}  conv_max={fwd_conv_max:.2e}")
         if is_barrier and grad_norm > 100.0:
             spike_path = os.path.join(
                 _POLICY_DIR, f"spike_{env_tag}_{file_variant}_upd{update_idx+1}.npz")
