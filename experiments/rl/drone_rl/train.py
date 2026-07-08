@@ -273,7 +273,7 @@ def train(
         "min_obs_margin", "max_obs_margin", "plan_margin_max", "wall_clock_s", "ep_step",
         "eval_cost", "eval_closest_margin", "eval_n_grazing", "eval_n_violations",
         # barrier arms: per-update forward-solve health (silent-non-convergence probe)
-        "fwd_conv_max", "fwd_iters_max", "fwd_n_nonconv",
+        "fwd_conv_max", "fwd_iters_max", "fwd_n_nonconv", "fwd_rs_max", "fwd_comp_max",
     ]
     csv_rows: list[dict] = []
 
@@ -291,6 +291,8 @@ def train(
     # ------------------------------------------------------------------ #
     for update_idx in range(n_updates):
         t0 = time.time()
+        x_before = x                                   # pre-update state (spike replay)
+        b_guess_before = blayer.snapshot() if is_barrier else None
 
         # ---- gradient update ----
         if variant == "plan_hard":
@@ -351,14 +353,34 @@ def train(
         # second branch returns an unconverged point with no error. Correlating
         # these per-update maxima with grad spikes tests the non-convergence
         # hypothesis for V4p's ~1e2..2e4 spikes (2026-07-07).
+        # A solve is "non-converged" if it FAILS ANY termination criterion of the
+        # lifted smoothed-KKT check — hard-conv OR slack-consistency (r+s) OR
+        # complementarity (s*y-kappa), OR it hit the iteration cap. The old check
+        # (hard-conv only) mislabeled cap-outs with small hard residual as
+        # converged; a cap-out that "passes" hard-conv but fails rs/comp is exactly
+        # the ambiguous exit that makes an exploding gradient's status uncertain.
         fwd_conv_max, fwd_iters_max, fwd_n_nonconv = "", "", ""
+        fwd_rs_max, fwd_comp_max = "", ""
         if is_barrier:
-            b_iters, b_convs = blayer.pop_stats()
+            b_iters, b_convs, b_rs, b_comp = blayer.pop_stats()
             if b_convs:
+                tol = blayer.cfg["sqp_tol"]
+                ctol = blayer.cfg.get("fwd_comp_tol_rel", 0.5)
+                cap = blayer.cfg.get("fused_max_sqp_iter", 40)
                 fwd_conv_max = max(b_convs)
                 fwd_iters_max = max(b_iters)
-                fwd_n_nonconv = sum(1 for c in b_convs if c > blayer.cfg["sqp_tol"])
-                print(f"    fwd iters/solve: {b_iters}  conv_max={fwd_conv_max:.2e}")
+                fwd_rs_max = max(r for r in b_rs if r == r) if any(
+                    r == r for r in b_rs) else float("nan")
+                fwd_comp_max = max(c for c in b_comp if c == c) if any(
+                    c == c for c in b_comp) else float("nan")
+                fwd_n_nonconv = sum(
+                    1 for it_, cv, rs_, cp_ in zip(b_iters, b_convs, b_rs, b_comp)
+                    if (cv > tol or it_ >= cap
+                        or (rs_ == rs_ and rs_ > tol)
+                        or (cp_ == cp_ and cp_ > ctol)))
+                print(f"    fwd iters/solve: {b_iters}")
+                print(f"    conv_max={fwd_conv_max:.2e} rs_max={fwd_rs_max:.2e} "
+                      f"comp_max={fwd_comp_max:.2e} n_nonconv={fwd_n_nonconv}")
         if is_barrier and grad_norm > 100.0:
             spike_path = os.path.join(
                 _POLICY_DIR, f"spike_{env_tag}_{file_variant}_upd{update_idx+1}.npz")
@@ -368,8 +390,9 @@ def train(
                 _extra["guess_controls"] = np.asarray(b_guess_before[1])
             np.savez(spike_path, **_extra,
                      **{k: np.asarray(v) for k, v in policy.items()})
-            print(f"  [SPIKE] upd {update_idx+1}: grad={grad_norm:.3e} "
-                  f"fwd_conv_max={fwd_conv_max} fwd_iters_max={fwd_iters_max} "
+            print(f"  [SPIKE] upd {update_idx+1}: grad={grad_norm:.3e} | "
+                  f"iters={b_iters} | conv_max={fwd_conv_max:.2e} "
+                  f"rs_max={fwd_rs_max:.2e} comp_max={fwd_comp_max:.2e} "
                   f"n_nonconv={fwd_n_nonconv} -> {os.path.basename(spike_path)}")
 
         wall_t = time.time() - t0
@@ -437,6 +460,8 @@ def train(
             "fwd_conv_max": fwd_conv_max,
             "fwd_iters_max": fwd_iters_max,
             "fwd_n_nonconv": fwd_n_nonconv,
+            "fwd_rs_max": fwd_rs_max,
+            "fwd_comp_max": fwd_comp_max,
         })
         # Incremental flush: a crash/kill must not lose completed updates.
         with open(csv_path, "w", newline="") as f:

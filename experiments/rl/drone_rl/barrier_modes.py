@@ -149,7 +149,7 @@ def make_barrier_ws_layer(solver, cfg=None):
     if cfg["fwd_conv_check"] == "auto":
         # non-lifted fallback semantics; the lifted loop has its own composite check
         cfg["fwd_conv_check"] = "smoothed" if not cfg["use_slack"] else "hard"
-    cell = {"guess": None, "iters": [], "convs": []}
+    cell = {"guess": None, "iters": [], "convs": [], "rs": [], "comp": []}
 
     # JITTED fused-CUDA fast path (warm solves): one compiled call per solve. Closed
     # over solver/cfg (static); pp/weights/warm-start primals are traced arguments.
@@ -189,6 +189,8 @@ def make_barrier_ws_layer(solver, cfg=None):
                 "num_iter": int(sol.num_iter), "final_conv": float(sol.final_conv),
                 "kappas": jnp.asarray([cfg["target_kappa"]]),
                 "y_f_dyn": sol.y_f_dyn, "y_g_stacked": sol.y_g_stacked,
+                # lifted smoothed-KKT residuals (0/inf-free floats for the stats)
+                "rs_res": float(sol.rs_res), "comp_rel": float(sol.comp_rel),
             }
             # No rescue (user decision 2026-07-07): the fused loop is globalized
             # in-jit (relaxed-barrier merit LS, cap 40) — non-convergence is
@@ -200,6 +202,8 @@ def make_barrier_ws_layer(solver, cfg=None):
         cell["guess"] = _shift_primal(res["states"], res["controls"])
         cell["iters"].append(int(res["num_iter"]))
         cell["convs"].append(float(res["final_conv"]))
+        cell["rs"].append(float(res.get("rs_res", float("nan"))))
+        cell["comp"].append(float(res.get("comp_rel", float("nan"))))
         return res
 
     @jax.custom_vjp
@@ -266,9 +270,9 @@ def make_barrier_ws_layer(solver, cfg=None):
             cell["guess"] = snap
 
         def pop_stats(self):
-            iters, convs = cell["iters"], cell["convs"]
-            cell["iters"], cell["convs"] = [], []
-            return iters, convs
+            out = (cell["iters"], cell["convs"], cell["rs"], cell["comp"])
+            cell["iters"], cell["convs"], cell["rs"], cell["comp"] = [], [], [], []
+            return out
 
     return _Layer()
 
