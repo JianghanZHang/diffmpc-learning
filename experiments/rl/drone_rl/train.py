@@ -354,7 +354,11 @@ def train(
         if is_barrier and grad_norm > 100.0:
             spike_path = os.path.join(
                 _POLICY_DIR, f"spike_{env_tag}_{file_variant}_upd{update_idx+1}.npz")
-            np.savez(spike_path, x=np.asarray(x),
+            _extra = {"x": np.asarray(x), "x_before": np.asarray(x_before)}
+            if b_guess_before is not None:
+                _extra["guess_states"] = np.asarray(b_guess_before[0])
+                _extra["guess_controls"] = np.asarray(b_guess_before[1])
+            np.savez(spike_path, **_extra,
                      **{k: np.asarray(v) for k, v in policy.items()})
             print(f"  [SPIKE] upd {update_idx+1}: grad={grad_norm:.3e} "
                   f"fwd_conv_max={fwd_conv_max} fwd_iters_max={fwd_iters_max} "

@@ -77,16 +77,16 @@ DEFAULT_LB_CFG = dict(
     # hard-active limit as W~1e6 but risks f64 cancellation in the reduced KKT
     # (leading hypothesis for V4p's intermittent ~2e4 grad spikes).
     bwd_yg_mode="analytic",
-    # Pure default = "Case 1" (user, gated 2026-07-07 5-way): reconstruct y = kappa/s_raw
-    # at states_c and fold W = y^2/kappa — zero knobs, exact manifold identities wherever
-    # s_raw > 0, sign-safe on tolerance-level crossings (the square keeps W positive; the
-    # crossing rows degenerate to the benign hard-equality limit). Gate: cos +0.99967 vs
-    # the tight reference at the worst crossing state, indistinguishable from the
-    # smoothed/clamped variants. The CACHED-dual variant ("Case 2") re-failed the same
-    # gate (cos 0.52): the forward dual is anchored one linearization back.
-    bwd_w_from_dual="auto",     # "auto": True for pure (Case 1), False for elastic
-    bwd_w_cap=None,             # optional hard clamp on W (off)
-    bwd_pure_smooth_gamma=None,  # optional retraction smoothing (off; gated equivalent)
+    # Pure backward dual/W sourcing. Default = retraction-SMOOTHED reconstruction
+    # (gamma_eff=1e8): bounded W and bounded Hessian dual — never produced a
+    # converged-solve spike in any run. "Case 1" (y=kappa/s_raw, W=y^2/kappa,
+    # bwd_w_from_dual=True) gated clean at single states but produced a 2.8e7 grad
+    # spike with all solves converged in the LS-fused run (upd 8) — unbounded-W tail
+    # suspect, kept as a non-default option. "Case 2" (cached forward dual) failed
+    # its gate outright (cos 0.52; one-anchor-behind staleness).
+    bwd_w_from_dual="auto",       # "auto": False (Case-1 demoted after the upd-8 spike)
+    bwd_w_cap="auto",             # "auto": off
+    bwd_pure_smooth_gamma="auto",  # "auto": 1e8 for pure (bounded W + bounded Hessian dual)
     inner_cfg=dict(
         rho_bar=0.1, sigma=1e-6, rho_f_factor=1000.0, alpha=1.6,
         tol=1e-9, max_iter=5000, check_termination_every=25,
@@ -117,7 +117,13 @@ def make_barrier_ws_layer(solver, cfg=None):
     """
     cfg = {**DEFAULT_LB_CFG, **(cfg or {})}
     if cfg["bwd_w_from_dual"] == "auto":
-        cfg["bwd_w_from_dual"] = not cfg["use_slack"]     # Case 1 for pure
+        # Case-1 (y=kappa/s_raw, W=y^2/kappa) DEMOTED to non-default 2026-07-07: in the
+        # LS-fused production run it produced a grad spike of 2.8e7 at upd 8 with ALL
+        # solves converged (n_nonconv=0) — the unbounded W=kappa/s_raw^2 tail on
+        # tolerance-level crossing rows is the suspect (exact replay pending better
+        # spike checkpoints). The bounded smooth backward has never produced a
+        # converged-solve spike in any run.
+        cfg["bwd_w_from_dual"] = False
     if cfg["bwd_pure_smooth_gamma"] == "auto":
         cfg["bwd_pure_smooth_gamma"] = 1.0e8 if not cfg["use_slack"] else None
     if cfg["bwd_w_cap"] == "auto":
