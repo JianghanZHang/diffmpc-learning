@@ -315,6 +315,34 @@ observation was an artifact — the flag wasn't plumbed; never actually A/B'd in
   construction), re-eval barrier-trained weights under the HARD deploy controller, V2@lr=3e-3,
   multi-seed. CSVs: `results/train_quadrotor_{plan,bptt}_barrier_seed0.csv`; policies saved.
 
+## ✅ UPDATE 2026-07-08 (2) — §4.7 regularized sensitivities: A/B confirms sigma_x tames the spikes
+
+Implemented the Log_Barrier_ADMM.pdf §4.7 regularized adjoint (solver `2825998`, layer/CLI
+`a850ef0`/`feec665`): `sigma_x*I` on the primal Hessian block (Levenberg–Marquardt) + `-sigma_f*I`
+on the equality-dual block (softened tangent feasibility). Both default 0 = exact unregularized
+(gated byte-for-byte; matches an independent dense reference of eq. 44 exactly on the dense path).
+`train.py --bwd_sigma_x/--bwd_sigma_f`.
+
+**A/B (V4p pure lifted, seed 0, 95 upd, identical code, only sigma_x differs) — plot
+`results/plot/quadrotor_regsens_ab.png`, CSVs `*_regOFF.csv` / `*_regsx0.01sf0_seed0.csv`:**
+| | OFF sigma_x=0 | ON sigma_x=1e-2 |
+|---|---|---|
+| grad max | 100.9 | **48.3** |
+| updates grad>50 / >100 | 3 / 1 | **0 / 0** |
+| updates nonconv>0 | 21 | 29 |
+| eval @ 60/70/80/90 | 32.8/33.0/35.2/**35.7** | 32.7/32.8/32.8/**32.8** |
+| final eval | 34.6 | 33.4 |
+
+**Mechanism confirmed:** sigma_x is backward-only so it does NOT reduce non-convergence (ON has
+MORE nonconv windows, 29 vs 21, as the diverged θ-path visits different ones) — but it makes the
+ADJOINT robust to the near-singular reduced Hessian at those points, capping the gradient
+(100.9→48.3, none >50). Adam then never takes the disruptive step, so eval stays FLAT at the
+hard-arm level (32.7–32.8) instead of OFF's late drift to 35.7. 0 violations both.
+sigma_x=1e-2 = a 10% floor relative to the smallest cost curvature (R=0.1). Cost: backward-only,
+~same per-update time. ⇒ **recommend sigma_x~1e-2 as the default for the pure-barrier BPTT arm.**
+(OFF upd-61 spike checkpoint kept for a deterministic replay if a single-point damping number is
+wanted.)
+
 ## ✅ UPDATE 2026-07-08 — LIFTED barrier SQP (outer-slack IPM) + rescale wiring; V4p spike saga CLOSED
 
 **The V4p pure-barrier gradient-spike investigation is resolved.** Full chain (all committed &

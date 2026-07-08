@@ -22,15 +22,14 @@ from util.plot import (  # noqa: E402
 
 # (label, csv, color, linestyle) — solid = hard / elastic-barrier, dashed = PURE barrier.
 # Pure entries are skipped silently until their runs produce CSVs.
+# V2/V4 = the UPDATED pure-barrier (no inequality slack) instances.
+# V4's canonical *_pure_seed0.csv is being overwritten by the in-flight regsens A/B;
+# _lifted.csv is the finished pure-barrier lifted run (eval 46.76->32.91).
 ARMS = [
-    ("V1 hard-plan",        "train_quadrotor_plan_hard_seed0.csv",     ARM_COLORS["plan_hard"], "-"),
-    ("V2 barrier-plan (lr 3e-3)", "train_quadrotor_plan_barrier_seed0.csv", ARM_COLORS["plan_barrier"], "-"),
-    ("V3 hard-BPTT h24",    "train_quadrotor_bptt_hard_h24_seed0.csv", ARM_COLORS["bptt_hard"], "-"),
-    ("V4 barrier-BPTT h24", "train_quadrotor_bptt_barrier_seed0.csv",  ARM_COLORS["bptt_barrier"], "-"),
-    ("V2p PURE barrier-plan", "train_quadrotor_plan_barrier_pure_seed0.csv",
-     ARM_COLORS["plan_barrier_pure"], "--"),
-    ("V4p PURE barrier-BPTT h24", "train_quadrotor_bptt_barrier_pure_seed0.csv",
-     ARM_COLORS["bptt_barrier_pure"], "--"),
+    ("V1 hard-plan",        "train_quadrotor_plan_hard_seed0.csv",          ARM_COLORS["plan_hard"], "-"),
+    ("V2 barrier-plan",     "train_quadrotor_plan_barrier_pure_seed0.csv",  ARM_COLORS["plan_barrier"], "-"),
+    ("V3 hard-BPTT h24",    "train_quadrotor_bptt_hard_h24_seed0.csv",      ARM_COLORS["bptt_hard"], "-"),
+    ("V4 barrier-BPTT h24", "train_quadrotor_bptt_barrier_pure_seed0_lifted.csv", ARM_COLORS["bptt_barrier"], "-"),
 ]
 
 
@@ -99,7 +98,7 @@ def main():
                for n in data]
     fig.legend(handles=handles, loc="upper center", ncol=3, frameon=False,
                fontsize=9, bbox_to_anchor=(0.5, 1.0))
-    fig.suptitle("Diff-WMPC on the grazing quadrotor — hard vs barrier (elastic / PURE) arms (seed 0)",
+    fig.suptitle("Diff-WMPC on the grazing quadrotor — hard vs pure-barrier arms (seed 0)",
                  fontsize=11.5, color=INK, y=1.045, fontweight="bold")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     save_fig(fig, "quadrotor_v2_v4_training_curves.png")
