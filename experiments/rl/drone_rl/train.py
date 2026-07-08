@@ -165,6 +165,8 @@ def train(
     barrier_forward: str = "fused",
     barrier_mode: str = "elastic",
     barrier_bwd: str = "default",
+    bwd_sigma_x: float = 0.0,
+    bwd_sigma_f: float = 0.0,
     time_budget: float = 1200.0,
 ) -> dict:
     """Train the Diff-WMPC policy for the obstacle-avoidance task.
@@ -229,7 +231,9 @@ def train(
                          # pure barrier: no elastic slack — the Moreau-envelope-style
                          # relaxation biases the fixed point by xi=y/gamma (exploitable);
                          # pure keeps iterates strictly feasible, bias O(kappa).
-                         "use_slack": barrier_mode == "elastic"})
+                         "use_slack": barrier_mode == "elastic",
+                         # §4.7 regularized sensitivities (0 = off)
+                         "bwd_sigma_x": bwd_sigma_x, "bwd_sigma_f": bwd_sigma_f})
 
     rng = jax.random.PRNGKey(seed)
     rng, init_key = jax.random.split(rng)
@@ -267,6 +271,8 @@ def train(
     env_tag = env.__name__.split(".")[-1].replace("_env", "")
     # pure-barrier runs get their own files; elastic keeps the historical names
     file_variant = variant + ("_pure" if (is_barrier and barrier_mode == "pure") else "")
+    if is_barrier and (bwd_sigma_x or bwd_sigma_f):
+        file_variant += f"_regsx{bwd_sigma_x:g}sf{bwd_sigma_f:g}"
     csv_path = os.path.join(_RESULTS_DIR, f"train_{env_tag}_{file_variant}_seed{seed}.csv")
     csv_fields = [
         "update", "train_loss_mean", "grad_norm",
@@ -538,6 +544,8 @@ if __name__ == "__main__":
     ap.add_argument("--barrier_forward", default="fused", choices=["fused", "eager"])
     ap.add_argument("--barrier_mode", default="elastic", choices=["elastic", "pure"])
     ap.add_argument("--barrier_bwd", default="default", choices=["default", "smooth", "case1"])
+    ap.add_argument("--bwd_sigma_x", type=float, default=0.0)  # §4.7 primal LM reg
+    ap.add_argument("--bwd_sigma_f", type=float, default=0.0)  # §4.7 equality softening
     ap.add_argument("--time_budget", type=float, default=1200.0)
     ap.add_argument("--n_total", type=int, default=40)
     ap.add_argument("--eval_every", type=int, default=10)
@@ -555,6 +563,7 @@ if __name__ == "__main__":
         n_total=args.n_total, eval_every=args.eval_every, eval_steps=args.eval_steps,
         barrier_glob=args.barrier_glob, barrier_forward=args.barrier_forward,
         barrier_mode=args.barrier_mode, barrier_bwd=args.barrier_bwd,
+        bwd_sigma_x=args.bwd_sigma_x, bwd_sigma_f=args.bwd_sigma_f,
         time_budget=args.time_budget,
     )
 
