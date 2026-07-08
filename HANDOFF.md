@@ -438,18 +438,60 @@ rel=3.5e-5, 0 flagged.
   out. Not the barrier's math, not the landscape, not the backward: termination discipline
   (cf. Frey2025's "termination criterion of the SQP method needs to be adjusted" + their
   standing assumption "the solver converged to w*").
-  **Fix (barrier_modes, gated by construction + run in flight):** (1) fused cap 15→40
-  (`fused_max_sqp_iter`; while_loop exits early so easy solves cost nothing); (2) RESCUE:
-  `final_conv > sqp_tol` after the jitted solve → re-solve eagerly (filter+restoration,
-  60-iter budget) from the same warm cell; `cell["n_rescues"]` counts. Validation run
-  (rescued, instrumented, smooth backward) IN FLIGHT — expect n_nonconv effects gone, spikes
-  gone; unrescued-smooth partial CSV archived as `*_smooth_norescue_partial.csv`, spike
-  checkpoint `trained_policies/spike_*_upd35.npz` kept for replay.
+  **FINAL FIX (user decisions 2026-07-07): globalize the FAST path; no rescue.**
+  - `barrier_merit_linesearch` is fully jittable (vmap over a fixed α grid) → wired INTO
+    `logbarrier_nlp_solve_jit` (diffmpc2 `1c465a7`, `linesearch=True` default; α=1 accepted on
+    easy solves — jit-vs-eager parity gates re-passed, 6–9 iters, rel~1e-9). Fused cap 15→40.
+    Rationale: iterations alone cannot fix an un-globalized full-step Newton (it OSCILLATES on
+    hard pure instances — the measured 07-02 crawls); globalization can.
+  - An interim eager-rescue path was tried and REMOVED (`46bc962`): the rescued run was
+    spike-free to upd 70 (eval 32.9 ≈ hard V1!) but spiked at upd 71 — the rescue never
+    verified its own output (and the eval-cold path ran on the 15-iter budget). Non-convergence
+    stays VISIBLE (never silent) via the new per-update CSV columns `fwd_conv_max` /
+    `fwd_iters_max` / `fwd_n_nonconv` + spike θ/x checkpoints (`trained_policies/spike_*.npz`).
+  **Backward final config — "Case-1" dual (user; 5-way gate scratch→`test/probe_w_mode_gate.py`):**
+  pure default = `y = κ/s_raw` reconstructed at states_c, fold `W = y²/κ` (`b64d61c`) — zero
+  knobs, exact manifold identities where s_raw>0, sign-safe on tolerance-level crossings (the
+  square). Gate at the worst crossing state vs tight 1e-6 reference: uncapped/clamp/smooth/
+  Case-1 all cos ≈ +0.9996 (indistinguishable); **Case-2 (cached forward dual) re-FAILED, cos
+  0.52** — the QP dual is exact for the tangent-plane constraint at the PREVIOUS iterate
+  (anchor offset = 2nd-order Taylor remainder / tiny pinned clearance ⇒ ~10% on the rows W
+  amplifies). Smoothing (`pure_gamma_smooth`) and clamp (`w_cap`) remain non-default options.
+  **PRODUCTION validation run IN FLIGHT** (pure, LS-fused, Case-1, no rescue, instrumented):
+  success = fwd_n_nonconv 0 throughout, no spikes, eval → ~32.7 (hard-arm level; the partial
+  runs reached 32.9–33.0 spike-free before their respective defects fired). Partial-run CSVs
+  archived: `*_smooth_norescue_partial.csv` (census), `*_smooth_rescue_partial.csv`.
+  Probe/gate scripts preserved in `experiments/rl/drone_rl/test/probe_{fused_gates,w_mode_gate,
+  v4p_grad_blowup}.py` (relative paths, remote-ready).
   Follow-ups: V4p lr sweep; multi-seed for all arms.
 - Figures: `results/plot/quadrotor_v2_v4_training_curves.png` + `quadrotor_rollout_v2_v4.png` now
   carry all 6 arms (dashed = pure).
 
-## ⏭️ NEXT TASK — barrier V2/V4 on the GRAZING quadrotor + write-up
+## ⏭️ NEXT TASK (2026-07-07) — Diff-WMPC training on the RACING task, run REMOTELY
+
+1. **Port the training to the racing task** (new env module under
+   `experiments/rl/drone_rl/env/` per the experiment-organizer layout — same API surface as
+   `quadrotor_env`: `build_problem_params / simulate_step / task_loss / obs_margin / goal_dist /
+   sample_x0 / START / QK / RK`), then run the arms with the PRODUCTION barrier config:
+   pure barrier, LS-fused forward (`fused_max_sqp_iter=40`), Case-1 backward, no rescue,
+   instrumentation on (watch `fwd_n_nonconv` — it must stay 0; treat any nonzero as a solver
+   bug to report, not to ignore). Hard arms as baselines.
+2. **Remote setup checklist** (both repos must be pushed — done this session):
+   - clone `diffmpc-learning` (branch `central-path-admm`) + `external/diffmpc2`
+     (branch `LogBarrier-ADMM-QP`);
+   - build the cuDSS FFI: `cmake -S turbompc/solvers/csrc -B build/ffi
+     -DPython3_EXECUTABLE=$PY -DPython3_FIND_VIRTUALENV=ONLY && cmake --build build/ffi -j`
+     from `external/diffmpc2/` (builds clean on cuDSS 0.7.1 and 0.8);
+   - venv with jax[cuda] + x64; env vars as in CLAUDE.md (`XLA_PYTHON_CLIENT_PREALLOCATE=false`,
+     cuDSS on `LD_LIBRARY_PATH`);
+   - sanity gates before training: `test/probe_fused_gates.py a` (forward parity) and
+     `test/probe_w_mode_gate.py` (backward variants) — both relative-path, remote-ready.
+3. Keep `report/main.tex` in sync (the §4.4/§4.5 sections now need the truncated-iterate
+   caveat: the (s,y) pair must be re-evaluated on the manifold at states_c; the report's
+   "s∘y=κ keeps s away from zero" claim holds only for manifold-consistent pairs, NOT the raw
+   clearance at finite forward tolerance — measured crossings on 8/14 pinned solves at 1e-3).
+
+## ⏭️ PREVIOUS TASK (done 2026-07-05/07) — barrier V2/V4 on the GRAZING quadrotor + write-up
 
 1. **Hard-vs-barrier (V2/V4) — now testable.** The quadrotor's realized trajectory GRAZES (real
    active-set switches), so this is finally the regime for the hard-vs-smoothed-complementarity comparison.

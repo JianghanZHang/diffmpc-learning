@@ -1,0 +1,704 @@
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[margin=0.75in,columnsep=0.28in]{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=blue!55!black,urlcolor=blue!55!black]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\blkdiag}{\operatorname{blkdiag}}
+\newcommand{\half}{\tfrac{1}{2}}
+\newcommand{\ones}{\mathbf{1}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\setlength{\abovedisplayskip}{4pt plus 1pt minus 1pt}
+\setlength{\belowdisplayskip}{4pt plus 1pt minus 1pt}
+\emergencystretch=1.5em
+
+\title{Forward and Backward Passes of a Log-Barrier ADMM QP Solver\\
+\large A perturbed-KKT derivation in the TurboMPC ADMM convention}
+\author{Jianghan Zhang}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{From trajectory optimization to a QP}
+\label{sec:trajopt}
+
+We consider the discrete-time optimal control problem (OCP) in the form
+of~\cite{turbompc},
+\begin{equation}
+\label{eq:ocp}
+\begin{aligned}
+\min_{(x_t,u_t)_{t=0}^{N}}\ & \textstyle\sum_{t=0}^{N-1}\ell_t(x_t,u_t)+\ell_N(x_N)\\
+\text{s.t.}\ \ & x_0 = x_{\mathrm{init}},\\
+& f_t(x_t,u_t,x_{t+1},u_{t+1}) = 0, \quad t=0,\dots,N{-}1,\\
+& \underline g_t \le g_t(x_t,u_t) \le \overline g_t, \quad\ \ t=0,\dots,N,
+\end{aligned}
+\end{equation}
+with states $x_t\in\R^{n_x}$, controls $u_t\in\R^{n_u}$, implicit discretized dynamics
+$f_t$, and pointwise-in-time inequality constraints $g_t$ (bounds, obstacles,
+friction cones, \dots). The OCP data depend on parameters $\theta$ (cost weights,
+constraint geometry) with respect to which we ultimately want gradients.
+
+\paragraph{Stacked NLP.} Overloading $x := (x_t,u_t)_{t=0}^{N}\in\R^{n_w}$ for the
+stacked stage variables, collect the cost into $\ell$, the initial-condition and
+dynamics residuals into $f\in\R^{m}$, and the inequalities into \emph{one-sided}
+rows $g\in\R^{p}$ (each finite bound of \eqref{eq:ocp} contributes one row,
+$g_t \le \overline g_t$ or $-g_t \le -\underline g_t$; infinite bounds are dropped),
+so that \eqref{eq:ocp} is the parametric nonlinear program
+\begin{equation}
+\label{eq:nlp}
+\min_{x}\ \ell(x;\theta)\quad\text{s.t.}\quad f(x;\theta) = 0,\quad
+g(x;\theta) \le h(\theta).
+\end{equation}
+
+\paragraph{SQP.} Sequential quadratic programming~\cite[Ch.~18]{nw} solves
+\eqref{eq:nlp} by iterating: at the current primal--dual iterate, quadratize the
+Lagrangian, linearize the constraints, solve the resulting QP, and update the
+iterate along its solution with a linesearch. With the constraint Jacobians
+$C := \partial f/\partial x$ and $G := \partial g/\partial x$ evaluated at the
+iterate, $P \approx \nabla^2_{xx}\mathcal L$ a Hessian approximation (in practice
+Gauss--Newton), and $q$ the corresponding gradient, each subproblem is the convex QP
+studied in the rest of this note:
+\begin{equation}
+\label{eq:qp}
+\mathrm{QP}(\theta):\quad
+\min_{x}\ \half x^\top P x + q^\top x
+\quad\text{s.t.}\quad Cx = c,\ \ Gx \le h,
+\end{equation}
+with $P\succeq 0$, $C\in\R^{m\times n_w}$, $G\in\R^{p\times n_w}$. The time
+structure of \eqref{eq:ocp} makes $P$ block-tridiagonal, $C$ block-bidiagonal, and
+$G$ block-diagonal~\cite{turbompc} --- structure both passes below exploit. A
+differentiable MPC layer must provide (i) a \emph{forward pass} producing the
+primal--dual solution of \eqref{eq:qp} at each SQP iteration
+(Section~\ref{sec:forward}) and (ii) a \emph{backward pass} producing
+$\nabla_\theta L$ for a scalar loss $L$ of the converged solution --- obtained by
+differentiating the \emph{NLP's} optimality system, not the QP's
+(Section~\ref{sec:backward}).
+
+\section{Perturbed KKT and smoothed complementarity}
+\label{sec:pkkt}
+
+With multipliers $y_f\in\R^m$ (equalities) and $y_g\in\R^p$ (inequalities) and the
+slack $s := h - Gx$, the KKT conditions of \eqref{eq:qp} are
+\begin{equation}
+\label{eq:kkt}
+\begin{aligned}
+&Px+q+C^\top y_f+G^\top y_g = 0, \qquad Cx = c,\\
+&Gx + s = h,\qquad s\ge 0,\quad y_g\ge 0,\quad s\circ y_g = 0,
+\end{aligned}
+\end{equation}
+where $\circ$ is the elementwise product. All difficulty --- combinatorial for the
+solver, and geometric for differentiation --- sits in the last line. The solution map
+$\theta \mapsto (x,y_f,y_g)$ of \eqref{eq:kkt} is only piecewise smooth: at points
+where \emph{strict complementarity} fails ($s_i = y_{g,i} = 0$ for some row) the KKT
+Jacobian is singular and the map is nondifferentiable, with gradient jumps across
+active-set changes~\cite{optnet,frey}. We therefore smooth \eqref{eq:kkt} with two
+perturbations, used together or separately.
+
+\paragraph{(i) Barrier perturbation $\kappa$.} Following the interior-point
+tradition, replace complementarity by the \emph{perturbed KKT} (central-path)
+condition~\cite[Ch.~19]{nw}
+\begin{equation}
+\label{eq:centralpath}
+s \circ y_g = \kappa\ones, \qquad s > 0,\ y_g > 0,
+\end{equation}
+for a barrier parameter $\kappa > 0$. This is the stationarity system of the
+equality-constrained log-barrier subproblem (add $-\kappa\sum_i\log s_i$ to the
+cost); as $\kappa\searrow 0$ it recovers \eqref{eq:kkt}. Differentiating the
+$\kappa$-perturbed system instead of \eqref{eq:kkt} is exactly the mechanism used to
+obtain smooth gradients through QP/NLP layers~\cite{tracy,frey}.
+
+\paragraph{(ii) Inequality-slack (Moreau) perturbation $(\delta_\xi,\gamma_\xi)$.}
+Following TurboMPC's slack convention~\cite{turbompc}, introduce an
+\emph{inequality slack} $\xi \ge 0$ per one-sided row, toggled by the binary
+indicator $\delta_\xi\in\{0,1\}$ and priced quadratically:
+$Gx - \delta_\xi\xi \le h$ with penalty $\delta_\xi\tfrac{\gamma_\xi}{2}\|\xi\|^2$,
+$\gamma_\xi > 0$. For $\delta_\xi = 1$, minimizing over $\xi$ first replaces the
+indicator of $\{Gx\le h\}$ by its Moreau envelope
+$\tfrac{\gamma_\xi}{2}\,\mathrm{dist}^2(Gx,\,\{\cdot\le h\})$~\cite{parikh}: the
+constraint wall becomes a stiff quadratic ramp, the QP stays feasible under SQP
+linearization error, and the multiplier ramps up continuously as
+$y_g = \gamma_\xi\xi$ (TurboMPC's \texttt{ADMMSlack} smoothing~\cite{turbompc}).
+\textbf{The default is $\delta_\xi = 0$} (no inequality slack);
+$(\delta_\xi{=}1,\,\gamma_\xi{\to}\infty)$ is equivalent to $\delta_\xi = 0$.
+
+\paragraph{Combined perturbed system.} Applying both, the log-barrier subproblem is
+\begin{equation}
+\label{eq:barrier-sub}
+\begin{aligned}
+\min_{x,\xi}\ & \half x^\top Px + q^\top x
++ \delta_\xi\,\frac{\gamma_\xi}{2}\|\xi\|^2
+ - \kappa\sum_{i=1}^{p}\log s_i\\
+\text{s.t.}\ & Cx = c, \qquad s = h - Gx + \delta_\xi\,\xi ,
+\end{aligned}
+\end{equation}
+whose stationarity in $s$ gives $y_g = \kappa/s$ (elementwise) and, when
+$\delta_\xi = 1$, stationarity in $\xi$ gives $\gamma_\xi\xi = y_g$. Eliminating
+$\xi = \gamma_\xi^{-1}y_g$, the optimality conditions collapse to a square smooth
+root-finding problem in $w := (x, y_f, y_g)$:
+\begin{equation}
+\label{eq:pkkt}
+F_{\mathrm{QP}}(w;\theta) :=
+\begin{bmatrix}
+Px + q + C^\top y_f + G^\top y_g\\[1pt]
+Cx - c\\[1pt]
+s \circ y_g - \kappa\ones
+\end{bmatrix} = 0,
+\end{equation}
+\begin{equation}
+\label{eq:sdef}
+s := h - Gx + \delta_\xi\gamma_\xi^{-1}y_g \;(>0), \qquad y_g > 0 .
+\end{equation}
+The forward pass converges to the root of \eqref{eq:pkkt} for each QP subproblem;
+the backward pass differentiates the nonlinear counterpart of this system
+(Section~\ref{sec:backward}). The two perturbations place the solver in a four-way
+family of ADMM methods:
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+& $\kappa = 0$ (hard compl.) & $\kappa > 0$ (central path)\\
+\midrule
+$\delta_\xi=0$ & KKT \eqref{eq:kkt}; OSQP~\cite{osqp} & pure barrier (\textbf{default})\\
+$\delta_\xi=1$ & Moreau; \texttt{ADMMSlack}~\cite{turbompc} & slack barrier\\
+\bottomrule
+\end{tabular}
+\end{center}
+Both $\kappa > 0$ cells are modes of this solver (Section~\ref{sec:forward}).
+For any $\kappa>0$ the residual $F_{\mathrm{QP}}$ is smooth and its Jacobian is
+nonsingular (Section~\ref{sec:backward}), so $\theta\mapsto w(\theta)$ is $C^1$ ---
+including across activation/deactivation of constraints. The price is an
+$O(\kappa)$ bias of $x(\theta)$ relative to the hard QP solution, and an
+$O(\|y_g\|/\gamma_\xi)$ constraint violation from the inequality slack when
+$\delta_\xi = 1$; $\kappa\to 0$ (with $\delta_\xi = 0$, or $\gamma_\xi\to\infty$)
+recovers \eqref{eq:kkt}.
+
+\section{Forward pass: ADMM with a log-barrier slack update}
+\label{sec:forward}
+
+We follow the ADMM convention of \cite{turbompc} (itself OSQP's
+splitting~\cite{osqp,boyd}). Stack the constraints as
+$A := \bigl[\begin{smallmatrix}C\\ G\end{smallmatrix}\bigr]$ and give $Ax$ its own
+copy $z = (z_f, z_g)$:
+\begin{equation}
+\label{eq:split}
+\begin{aligned}
+\min_{x,z,\xi}\ & \half x^\top Px + q^\top x
++ \delta_\xi\,\frac{\gamma_\xi}{2}\|\xi\|^2
++ \mathcal I_{\{c\}}(z_f) + B_\kappa(z_g,\xi)\\
+\text{s.t.}\ & Ax - z = 0,
+\end{aligned}
+\end{equation}
+where $\mathcal I$ denotes an indicator function and
+\begin{equation}
+\label{eq:Bkappa}
+B_\kappa(z_g,\xi) :=
+-\kappa\sum_{i=1}^{p}\log\bigl(h_i - z_{g,i} + \delta_\xi\,\xi_i\bigr)
+\end{equation}
+is the log barrier on the copy. (At $\kappa = 0$, $B_\kappa$ degenerates to the
+indicator of $\{z_g - \delta_\xi\xi \le h\}$ and \eqref{eq:split} is exactly the
+TurboMPC splitting.) Introducing duplicated variables
+$(\tilde x, \tilde z)$ as in \cite{turbompc}, multipliers $w$ for
+$\tilde x - x = 0$ (which vanishes identically after the first iteration and is
+dropped below) and $y = (y_f, y_g)$ for $\tilde z - z = 0$, and step-size parameters
+$\sigma > 0$, $\rho := \blkdiag(\rho_f I_m,\ \rho_g I_p)\succ 0$, the augmented
+Lagrangian is
+\begin{multline}
+\label{eq:auglag}
+\mathcal L_{\sigma,\rho}
+= \half\tilde x^\top P\tilde x + q^\top\tilde x
++ \delta_\xi\,\frac{\gamma_\xi}{2}\|\xi\|^2
++ \mathcal I_{\{c\}}(z_f) + B_\kappa(z_g,\xi)\\
++ \mathcal I_{\{0\}}(A\tilde x - \tilde z)
++ \frac{\sigma}{2}\bigl\|\tilde x - x\bigr\|^2
++ \half\bigl\|\tilde z - z + \rho^{-1}y\bigr\|_\rho^2 ,
+\end{multline}
+with $\|v\|_\rho^2 := v^\top\rho\, v$. One ADMM iteration minimizes
+$\mathcal L_{\sigma,\rho}$ over $(\tilde x,\tilde z)$, then over $(x, z, \xi)$, then
+ascends the duals, with over-relaxation $\alpha\in(0,2)$.
+
+\subsection{Primal update}
+Minimizing \eqref{eq:auglag} over $(\tilde x,\tilde z)$ is an equality-constrained
+strictly convex QP whose KKT conditions are the linear
+system~\cite[Eq.~(7)]{turbompc}
+\begin{equation}
+\label{eq:primal}
+\begin{bmatrix} P+\sigma I & A^\top\\ A & -\rho^{-1}\end{bmatrix}
+\begin{bmatrix}\tilde x^{k+1}\\ \nu^{k+1}\end{bmatrix}
+=
+\begin{bmatrix}\sigma x^{k} - q\\ z^{k} - \rho^{-1}y^{k}\end{bmatrix}.
+\end{equation}
+The $-\rho^{-1}$ block is eliminated by a Schur complement:
+\begin{equation}
+\label{eq:schur}
+S\,\tilde x^{k+1} = \sigma x^{k} - q + A^\top\!\bigl(\rho z^{k} - y^{k}\bigr),
+\qquad \tilde z^{k+1} = A\tilde x^{k+1},
+\end{equation}
+with $S := P + \sigma I + A^\top\!\rho A \succ 0$. By the structure noted in
+Section~\ref{sec:trajopt}, $S$ is block-tridiagonal in time; its sparse
+factorization is computed once and reused across iterations, refactorizing only when
+$\rho$ is adapted~\cite{turbompc,osqp}. The over-relaxed iterates are
+\begin{equation}
+\label{eq:overrelax}
+\hat x^{k+1} = \alpha\tilde x^{k+1} + (1-\alpha)x^{k},\quad
+\hat z^{k+1} = \alpha\tilde z^{k+1} + (1-\alpha)z^{k},
+\end{equation}
+and the $x$-minimization gives $x^{k+1} = \hat x^{k+1}$.
+
+\subsection{Slack update: the proximal operator of the log barrier}
+\label{sec:slackupdate}
+Minimizing \eqref{eq:auglag} over $z_f$ gives $z_f^{k+1} = c$ (so $z_f$ need not be
+stored). The inequality block is the essential step. Let
+\begin{equation}
+\label{eq:ztilde}
+\tilde z_g^{k+1} := \hat z_g^{k+1} + \rho_g^{-1}y_g^{k}
+\end{equation}
+be the usual ADMM target --- the same point OSQP projects onto $\{z_g\le h\}$ and
+TurboMPC's \texttt{ADMMSlack} projects smoothly. Here the update is the prox of the
+barrier, jointly over $(z_g,\xi)$ and separable across rows:
+\begin{equation}
+\label{eq:zprox}
+(z_g,\xi)^{k+1}
+= \argmin_{z,\xi}\, B_\kappa(z,\xi)
++ \delta_\xi\tfrac{\gamma_\xi}{2}\|\xi\|^2
++ \tfrac{\rho_g}{2}\|z - \tilde z_g^{k+1}\|^2
+\end{equation}
+(for $\delta_\xi = 0$ the inequality slack is fixed, $\xi \equiv 0$, exactly as in
+TurboMPC's slack update). Per row, with the barrier slack
+$s(z,\xi) := h - z + \delta_\xi\xi$, the objective of \eqref{eq:zprox} is
+\begin{equation}
+\label{eq:prox-obj}
+\varphi(z,\xi) = -\kappa\log s(z,\xi)
++ \delta_\xi\tfrac{\gamma_\xi}{2}\xi^2
++ \tfrac{\rho_g}{2}\bigl(z - \tilde z_g^{k+1}\bigr)^2 .
+\end{equation}
+This is an \emph{unconstrained} smooth problem: the barrier absorbs $s \ge 0$ into
+its domain ($\varphi\to+\infty$ as $s\to 0^+$), and the quadratic terms make
+$\varphi$ strictly convex and coercive there, so the unique minimizer is the
+zero-gradient point. With $\partial s/\partial z = -1$ and
+$\partial s/\partial\xi = \delta_\xi$, the chain rule gives
+\begin{equation}
+\label{eq:prox-stat}
+\begin{aligned}
+\partial_z\varphi
+&= \tfrac{\kappa}{s} + \rho_g\bigl(z - \tilde z_g^{k+1}\bigr) = 0
+&&\Rightarrow\
+\tfrac{\kappa}{s} = \rho_g\bigl(\tilde z_g^{k+1} - z\bigr),\\
+\partial_\xi\varphi
+&= -\tfrac{\kappa}{s} + \gamma_\xi\xi = 0\ \ (\delta_\xi{=}1)
+&&\Rightarrow\
+\gamma_\xi\xi = \tfrac{\kappa}{s},
+\end{aligned}
+\end{equation}
+and the stationary $\xi = \kappa/(\gamma_\xi s) > 0$ is automatically positive, so
+$\xi \ge 0$ never activates. Solving \eqref{eq:prox-stat} for
+$z = \tilde z_g^{k+1} - \kappa/(\rho_g s)$ and
+$\delta_\xi\xi = \delta_\xi\kappa/(\gamma_\xi s)$ and substituting back into
+$s = h - z + \delta_\xi\xi$ with the residual $r^{k+1} := h - \tilde z_g^{k+1}$
+yields $s = r^{k+1} + \Gamma/s$, i.e.\ the scalar quadratic
+$s^2 - r^{k+1}s - \Gamma = 0$ per row, whose positive root is, elementwise,
+\begin{equation}
+\label{eq:retr-update}
+\boxed{
+\begin{aligned}
+s^{k+1} &= b_\Gamma\bigl(r^{k+1}\bigr),
+& \Gamma &:= \kappa\bigl(\rho_g^{-1} + \delta_\xi\,\gamma_\xi^{-1}\bigr),\\
+\xi^{k+1} &= \delta_\xi\,\frac{\kappa}{\gamma_\xi\, s^{k+1}},
+& z_g^{k+1} &= h - s^{k+1} + \xi^{k+1},
+\end{aligned}}
+\end{equation}
+where $b_\mu$ is the \emph{retraction map} (positive root of $b^2 - vb - \mu = 0$)
+\begin{equation}
+\label{eq:b}
+b_\mu(v) := \frac{v + \sqrt{v^2 + 4\mu}}{2}, \qquad \mu > 0,
+\end{equation}
+with the elementary properties:
+\begin{enumerate}[nosep,leftmargin=2.2em,label=(\roman*)]
+\item $b_\mu(v) > 0$ for all $v\in\R$;
+\item $b_\mu(v)\,b_\mu(-v) = \mu$ (built-in complementarity);
+\item $b_\mu(v) - b_\mu(-v) = v$;
+\item $b_\mu(v)\to\max(v,0)$ as $\mu\to 0^+$ (smooth ReLU);
+\item $b_\mu'(v) = \half\bigl(1+v/\sqrt{v^2+4\mu}\bigr)\in(0,1)$ and
+  $b_\mu'(v) + b_\mu'(-v) = 1$.
+\end{enumerate}
+In the default mode $\delta_\xi = 0$: $\Gamma = \kappa/\rho_g$, $\xi^{k+1} = 0$, and
+$z_g^{k+1} = h - b_{\kappa/\rho_g}(r^{k+1})$. (For $v<0$ we evaluate
+$b_\mu(v) = 2\mu/(\sqrt{v^2+4\mu}-v)$ to avoid numerical issues.)
+
+\subsection{Dual update and exact perturbed complementarity}
+The dual ascent uses the over-relaxed copy~\cite{turbompc}:
+\begin{equation}
+\label{eq:dual}
+y_f^{k+1} = y_f^{k} + \rho_f\bigl(\hat z_f^{k+1} - c\bigr),\quad
+y_g^{k+1} = y_g^{k} + \rho_g\bigl(\hat z_g^{k+1} - z_g^{k+1}\bigr).
+\end{equation}
+By \eqref{eq:ztilde}, $y_g^{k+1} = \rho_g(\tilde z_g^{k+1} - z_g^{k+1})$, and the
+$z$-stationarity in \eqref{eq:prox-stat} evaluates this in closed form:
+\begin{equation}
+\label{eq:headline}
+\boxed{\,
+y_g^{k+1} = \frac{\kappa}{s^{k+1}}
+\;\Rightarrow\;
+s^{k+1}\!\circ y_g^{k+1} = \kappa\ones,\
+\gamma_\xi\xi^{k+1} = \delta_\xi y_g^{k+1}
+\,}
+\end{equation}
+elementwise, \emph{at every iteration $k$} --- not only in the limit. The iterates
+live on the central-path manifold \eqref{eq:centralpath} by construction, with
+$y_g^{k+1} > 0$ automatic from property (i), and the inequality-slack stationarity
+holds identically in both modes. At a fixed point, $Ax = z$ makes
+$s = h - Gx + \delta_\xi\xi = h - Gx + \delta_\xi\gamma_\xi^{-1}y_g$, so
+$(x, y_f, y_g)$ satisfies \emph{exactly} the perturbed KKT system
+\eqref{eq:pkkt}--\eqref{eq:sdef} of the QP.
+
+\paragraph{Limits.} As $\kappa\to 0^+$, property (iv) collapses
+\eqref{eq:retr-update}, for $\delta_\xi = 1$, to TurboMPC's smoothed projection
+$\tilde\Pi^{\gamma_\xi}(\tilde z_g) =
+\frac{\rho_g}{\gamma_\xi+\rho_g}\tilde z_g
++ \frac{\gamma_\xi}{\gamma_\xi+\rho_g}\Pi(\tilde z_g)$
+\cite[Eq.~(15)]{turbompc}, and, for $\delta_\xi = 0$, to OSQP's hard projection
+$z_g^{k+1} = \min(\tilde z_g^{k+1}, h)$: a smooth deformation of the standard
+projection ADMM, at identical per-iteration cost.
+
+\paragraph{Termination, $\rho$-adaptation, continuation.} Convergence is declared on
+the standard residuals $r_{\mathrm{prim}} = \|Ax - z\|_\infty$ and
+$r_{\mathrm{dual}} = \|Px + q + A^\top y\|_\infty$
+\cite[Eq.~(3)]{turbompc} (slack stationarity
+$\gamma_\xi\xi - \delta_\xi y_g = 0$ holds identically by \eqref{eq:headline});
+$\bar\rho$ is adapted OSQP-style from the residual ratio
+with $\rho_f = 10^3\bar\rho$, $\rho_g = \bar\rho$, $\sigma = 10^{-6}$, refactorizing
+$S$ on each change. Optionally $\kappa$ is annealed geometrically with warm starts;
+for differentiable use a fixed $\kappa$ is preferred so the backward differentiates
+the fixed point the forward reached.
+
+\section{Backward pass: implicit differentiation of the NLP's perturbed KKT}
+\label{sec:backward}
+
+Let $L = L(x^\star)$ be a scalar loss of the converged SQP solution. We do
+\emph{not} differentiate through solver iterations --- neither the ADMM loop nor the
+SQP loop. Nor do we differentiate the last QP subproblem's optimality system: the
+object that carries the sensitivities of \eqref{eq:nlp} is the \emph{NLP's} own
+smoothed KKT system, and QP-level sensitivities coincide with the NLP's only when
+the QP carries the \emph{exact} Lagrangian Hessian at the
+solution~\cite[Thm.~2]{frey}. Since the forward SQP typically runs a Gauss--Newton
+$P$ (Section~\ref{sec:trajopt}), differentiating the QP it actually solved can
+silently degrade the gradients~\cite[Rem.~3]{frey}. The backward pass therefore
+re-assembles the NLP system at the converged point.
+
+\subsection{The NLP's smoothed KKT system}
+At SQP convergence, the iterate $w^\star := (x^\star, y_f, y_g)$ satisfies the
+$(\kappa,\delta_\xi,\gamma_\xi)$-perturbed optimality conditions of \eqref{eq:nlp}
+--- the nonlinear counterpart of \eqref{eq:pkkt}, with the smoothed complementarity
+imposed on the \emph{nonlinear} residual (the interior-point-smoothed conditions of
+\cite[Eq.~(10)]{frey}, whose barrier parameter $\tau$ is our $\kappa$):
+\begin{equation}
+\label{eq:nlp-pkkt}
+F(w;\theta) :=
+\begin{bmatrix}
+\nabla_x\ell(x;\theta) + C(x)^\top y_f + G(x)^\top y_g\\[1pt]
+f(x;\theta)\\[1pt]
+s \circ y_g - \kappa\ones
+\end{bmatrix} = 0,
+\end{equation}
+\begin{equation}
+\label{eq:nlp-sdef}
+s := h(\theta) - g(x;\theta) + \delta_\xi\gamma_\xi^{-1}y_g \;(>0),
+\qquad y_g > 0,
+\end{equation}
+where $C(x) := \partial f/\partial x$ and $G(x) := \partial g/\partial x$ are the
+constraint Jacobians evaluated at $x$ (for affine $f,g$ and quadratic $\ell$,
+\eqref{eq:nlp-pkkt} reduces exactly to \eqref{eq:pkkt}). The first row is
+$\nabla_x$ of the NLP Lagrangian
+$\mathcal L := \ell(x;\theta) + y_f^\top f(x;\theta) + y_g^\top g(x;\theta)$.
+Differentiating \eqref{eq:nlp-pkkt} at its root yields the \emph{exact} gradient of
+the relaxed solution map, smooth across active-set changes.
+
+\subsection{The implicit function theorem}
+The residual $F(w;\theta)$ of \eqref{eq:nlp-pkkt} is $C^1$ in $(w,\theta)$ whenever
+$\ell, f, g$ are twice continuously differentiable~\cite[Ass.~1]{frey}. Let
+$w^\star$ satisfy $F(w^\star;\theta) = 0$ with $s > 0$, $y_g > 0$ (guaranteed for
+$\kappa>0$ by \eqref{eq:headline}; at SQP convergence the linearized and nonlinear
+residuals coincide), and define
+$M := \partial F/\partial w\,\big|_{(w^\star,\theta)}$. If $M$ is nonsingular
+(established below), the implicit function theorem yields a locally unique $C^1$
+map $\theta\mapsto w(\theta)$ with $F(w(\theta);\theta)\equiv 0$ and, by total
+differentiation
+$\;\frac{\partial F}{\partial w}\frac{\partial w}{\partial\theta}
++ \frac{\partial F}{\partial\theta} = 0$,
+\begin{equation}
+\label{eq:ift}
+\frac{\partial w}{\partial\theta} = -\,M^{-1}\frac{\partial F}{\partial\theta}
+\end{equation}
+--- the sensitivity result of \cite[Thm.~1]{frey}; their Thm.~3 adds that the
+smoothed map is $C^1$ for small $\kappa$ and approaches the unsmoothed one with
+error $O(\kappa)$. Rather than forming $\partial w/\partial\theta$
+column-by-column ($n_\theta$ solves with $M$), the gradient of a scalar loss needs
+a \emph{single} solve with $M^\top$: absorbing the sign, define the adjoint
+$\lambda = (\lambda_x,\lambda_f,\lambda_g)$ by
+\begin{equation}
+\label{eq:adjoint}
+M^\top \lambda = -\bigl(\nabla_x L,\, 0,\, 0\bigr),
+\qquad
+\nabla_\theta L = \Bigl(\frac{\partial F}{\partial\theta}\Bigr)^{\!\top}\lambda .
+\end{equation}
+
+\subsection{The Jacobian $M$ and the adjoint system}
+Differentiating \eqref{eq:nlp-pkkt} with $\partial s/\partial x = -G(x)$ and
+$\partial s/\partial y_g = \delta_\xi\gamma_\xi^{-1}I$ gives, in block form (rows =
+residuals, columns = $x, y_f, y_g$; all quantities evaluated at $w^\star$),
+\begin{equation}
+\label{eq:M}
+M =
+\begin{bmatrix}
+H & C^\top & G^\top\\
+C & 0 & 0\\
+-\diag(y_g)\,G & 0 & \diag\!\bigl(s + \delta_\xi\gamma_\xi^{-1}y_g\bigr)
+\end{bmatrix},
+\end{equation}
+where the $(1,1)$ block is the \emph{exact Lagrangian Hessian} of the NLP,
+\begin{equation}
+\label{eq:H}
+H := \nabla^2_{xx}\mathcal L
+= \nabla^2_{xx}\ell
++ \sum_{j=1}^{m} y_{f,j}\,\nabla^2_{xx} f_j
++ \sum_{i=1}^{p} y_{g,i}\,\nabla^2_{xx} g_i ,
+\end{equation}
+\emph{not} the Gauss--Newton $P$ used by the forward SQP --- sensitivities computed
+with an approximate Hessian can be badly degraded even when the forward solution is
+accurate~\cite[Thm.~2, Rem.~3]{frey}. Because $f$ and $g$ are stagewise, $H$ retains
+$P$'s block-tridiagonal sparsity. The adjoint system \eqref{eq:adjoint} written out
+is
+\begin{subequations}
+\label{eq:adjeqs}
+\begin{align}
+H\lambda_x + C^\top\lambda_f - G^\top\diag(y_g)\,\lambda_g &= -\nabla_x L,
+\label{eq:adj-a}\\
+C\lambda_x &= 0, \label{eq:adj-b}\\
+G\lambda_x + \diag\!\bigl(s+\delta_\xi\gamma_\xi^{-1}y_g\bigr)\lambda_g &= 0.
+\label{eq:adj-c}
+\end{align}
+\end{subequations}
+Two equivalent reductions of \eqref{eq:adjeqs} are used in practice.
+
+\subsection{Reduction A: retraction parameterization}
+\label{sec:redA}
+On the central-path manifold (stated for the default $\delta_\xi = 0$), properties
+(ii)--(iii) of $b_\kappa$ make the pair $(s, y_g)$ the graph of a \emph{single}
+unconstrained variable $v := y_g - s\in\R^p$:
+\begin{equation}
+s = b_\kappa(-v), \qquad y_g = b_\kappa(v),
+\end{equation}
+which satisfies $s\circ y_g = \kappa\ones$, $s,y_g>0$ \emph{identically} --- the
+complementarity residual disappears from the system. Differentiating with
+$B_p := \diag\bigl(b_\kappa'(v)\bigr)$, $B_n := \diag\bigl(b_\kappa'(-v)\bigr)$
+(both positive by (v)) gives $dy_g = B_p\,dv$, $ds = -B_n\,dv$, and the remaining
+residuals (stationarity, primal inequality $g(x;\theta) + s - h$, equality)
+linearize in $(dx, dv, dy_f)$ with matrix
+$\bigl[\begin{smallmatrix} H & G^\top B_p & C^\top\\ G & -B_n & 0\\
+C & 0 & 0\end{smallmatrix}\bigr]$.
+Subtracting $G^\top\times$(second row) from the first and using
+$B_p + B_n = I$ (property (v)) symmetrizes it:
+\begin{equation}
+\label{eq:J}
+J =
+\begin{bmatrix}
+H - G^\top G & G^\top & C^\top\\
+G & -B_n & 0\\
+C & 0 & 0
+\end{bmatrix} = J^\top .
+\end{equation}
+Because $J$ is symmetric, the adjoint solve is
+\begin{equation}
+\label{eq:J-adjoint}
+J\begin{bmatrix}\lambda_x\\ \lambda_v\\ \lambda_f\end{bmatrix}
+= -\begin{bmatrix}\nabla_x L\\ 0\\ 0\end{bmatrix},
+\qquad
+\bar\lambda_g := B_p\,\lambda_v ,
+\end{equation}
+where $\bar\lambda_g$ is the effective inequality adjoint used in the gradient
+assembly below.
+
+\subsection{Reduction B: Schur elimination onto a weighted Hessian}
+\label{sec:redB}
+Alternatively --- and for either value of $\delta_\xi$ --- eliminate $\lambda_g$
+directly from \eqref{eq:adj-c}: its coefficient
+$\diag(s+\delta_\xi\gamma_\xi^{-1}y_g)$ is diagonal and strictly positive for
+$\kappa>0$, so
+\begin{equation}
+\label{eq:lamg}
+\lambda_g = -\diag\!\bigl(s+\delta_\xi\gamma_\xi^{-1}y_g\bigr)^{-1} G\,\lambda_x .
+\end{equation}
+Substituting into \eqref{eq:adj-a} folds the inequalities into the Hessian block:
+\begin{equation}
+\label{eq:Wsys}
+\begin{bmatrix}
+H + G^\top\!\diag(W)\,G & C^\top\\
+C & 0
+\end{bmatrix}
+\begin{bmatrix}\lambda_x\\ \lambda_f\end{bmatrix}
+= -\begin{bmatrix}\nabla_x L\\ 0\end{bmatrix},
+\end{equation}
+with the smooth per-row weight
+\begin{equation}
+\label{eq:W}
+W := \frac{y_g}{s + \delta_\xi\gamma_\xi^{-1}y_g},
+\qquad
+W\big|_{\delta_\xi=0} = \frac{y_g}{s} = \frac{y_g^2}{\kappa},
+\end{equation}
+and the effective inequality adjoint
+$\bar\lambda_g := -y_g\circ\lambda_g = \diag(W)\,G\lambda_x$, matching
+\eqref{eq:J-adjoint}. This reduced saddle system is exactly the symmetric reduced
+coefficient matrix of \cite[Eq.~(9)]{frey} (there $S^{-1}M = \diag(\mu/s)$ plays
+the role of $W$). $W$ is the $C^1$ analogue of a hard active-set mask:
+\begin{center}
+\footnotesize
+\begin{tabular}{@{}llll@{}}
+\toprule
+regime & $y_{g,i}$ & $s_i$ & $W_i$\\
+\midrule
+inactive row & $\to 0$ & $>0$ & $\to 0$ (row drops out)\\
+active, $\kappa{\to}0$, $\delta_\xi{=}1$ & $>0$ & $\to\gamma_\xi^{-1}y_{g,i}$ & $\to\gamma_\xi$ (penalty stiffness)\\
+active, $\kappa{\to}0$, $\delta_\xi{=}0$ & $>0$ & $\to 0$ & $\to\infty$ (hard constraint)\\
+\bottomrule
+\end{tabular}
+\end{center}
+so $W\in[0,\gamma_\xi]$ always when $\delta_\xi = 1$. Since $G$ is block-diagonal
+per stage, $G^\top\diag(W)G$ perturbs only the diagonal blocks of $H$:
+\eqref{eq:Wsys} has \emph{the same block-tridiagonal saddle structure as the forward
+Schur system} \eqref{eq:schur}, and the same structured sparse solver serves both
+passes~\cite{turbompc}.
+
+\paragraph{Equivalence of the reductions.} Eliminating
+$\lambda_v = B_n^{-1}G\lambda_x$ from the middle row of \eqref{eq:J} gives
+$H - G^\top G + G^\top B_n^{-1}G = H + G^\top B_pB_n^{-1}G$ (using $I - B_n = B_p$),
+and on the manifold
+$B_pB_n^{-1} = \diag\bigl(b_\kappa'(v)/b_\kappa'(-v)\bigr)
+= \diag\bigl(b_\kappa(v)/b_\kappa(-v)\bigr) = \diag(y_g/s)$,
+which is exactly $W|_{\delta_\xi=0}$; likewise
+$\bar\lambda_g = B_pB_n^{-1}G\lambda_x = \diag(W)G\lambda_x$. (For $\delta_\xi = 1$
+the middle block becomes $-(B_n + \gamma_\xi^{-1}B_p)$ and
+$B_p(B_n+\gamma_\xi^{-1}B_p)^{-1}
+= \diag\bigl(y_g/(s+\gamma_\xi^{-1}y_g)\bigr) = W$.)
+Reductions A and B are the same linear system.
+
+\paragraph{Nonsingularity --- why $\kappa$ is load-bearing.}
+\eqref{eq:Wsys} is nonsingular iff $C$ has full row rank (LICQ; true by
+construction: the initial-condition and dynamics rows) and
+$H + G^\top\diag(W)G \succ 0$ on $\ker C$, which for small $\kappa$ follows from
+the second-order sufficient conditions at the solution~\cite[Ass.~1, Thm.~1]{frey}.
+The elimination \eqref{eq:lamg} itself required
+$\diag(s + \delta_\xi\gamma_\xi^{-1}y_g)\succ 0$: for $\kappa>0$ this holds
+\emph{everywhere}, because $s\circ y_g = \kappa$ keeps $s$ away from zero. In the
+hard limit $\kappa=0$ the genuine failure is a \emph{weakly active} row,
+$s_i = 0$ \emph{and} $y_{g,i} = 0$ (strict complementarity fails): the $i$-th
+complementarity row of $M$ vanishes identically, $M$ is singular, and the solution
+map is nondifferentiable~\cite{optnet,frey}, with $W_i = 0/0$ jumping between $0$
+(inactive side) and $\gamma_\xi$ or $\infty$ (active side). (A strongly active row,
+$s_i = 0$, $y_{g,i} > 0$, also zeroes the block entry when $\delta_\xi = 0$, but
+harmlessly: $W_i\to\infty$ just enforces $G_i\lambda_x = 0$.) The barrier removes
+the failure: substituting $s = \kappa/y_g$ (elementwise) gives
+$W = y_g^2/(\kappa + \delta_\xi\gamma_\xi^{-1}y_g^2)$, smooth along the central
+path, so $\nabla_\theta L$ is continuous across active-set changes~\cite{tracy}.
+
+\subsection{Assembling the parameter gradients}
+With $(\lambda_x,\lambda_f)$ from \eqref{eq:Wsys} (or \eqref{eq:J-adjoint}) and
+$\bar\lambda_g$ from \eqref{eq:W}, the contraction
+$\nabla_\theta L = (\partial F/\partial\theta)^\top\lambda$ of \eqref{eq:adjoint}
+takes, at the NLP level, the compact form
+\begin{equation}
+\label{eq:nlp-grads}
+\nabla_\theta L
+= \bigl[\partial_\theta\nabla_x\mathcal L\bigr]^\top\lambda_x
++ \bigl[\partial_\theta f\bigr]^\top\lambda_f
++ \bigl[\partial_\theta (g - h)\bigr]^\top\bar\lambda_g ,
+\end{equation}
+three mixed vector--Jacobian products of the problem functions evaluated at
+$(w^\star,\theta)$ --- the adjoint sensitivity of \cite[Eq.~(13)]{frey}. For
+parameters that enter only the cost (the typical learned-MPC case),
+$\partial_\theta f = 0$ and $\partial_\theta(g-h) = 0$, and \eqref{eq:nlp-grads}
+collapses to the single contraction
+$\nabla_\theta L = [\partial_\theta\nabla_x\ell(x^\star;\theta)]^\top\lambda_x$,
+one vector--Jacobian product of the cost gradient.
+
+\paragraph{QP-layer special case.} When the layer is the QP \eqref{eq:qp} itself,
+with data $\theta = (P,q,C,c,G,h)$ and $H = P$, expanding \eqref{eq:nlp-grads}
+datum-by-datum gives the familiar table
+\begin{equation}
+\label{eq:paramgrads}
+\begin{aligned}
+\nabla_P L &= \half\bigl(\lambda_x x^{\star\top} + x^\star\lambda_x^\top\bigr),
+& \nabla_q L &= \lambda_x,\\
+\nabla_C L &= \lambda_f x^{\star\top} + y_f\lambda_x^\top,
+& \nabla_c L &= -\lambda_f,\\
+\nabla_G L &= \bar\lambda_g x^{\star\top} + y_g\lambda_x^\top,
+& \nabla_h L &= -\bar\lambda_g .
+\end{aligned}
+\end{equation}
+
+\medskip
+\noindent\textbf{Summary.} The forward pass drives each QP subproblem to the root
+of \eqref{eq:pkkt} by a projection-free ADMM whose slack update is the closed-form
+prox of the log barrier \eqref{eq:retr-update}, holding $s\circ y_g = \kappa\ones$
+exactly at every iterate. The backward pass differentiates the \emph{NLP's}
+smoothed KKT system \eqref{eq:nlp-pkkt} at the converged SQP solution with the
+exact Lagrangian Hessian \eqref{eq:H}~\cite{frey}; the adjoint system
+\eqref{eq:Wsys} shares the block-tridiagonal structure --- and the linear solver
+--- of the forward pass. The parameters $(\kappa, \delta_\xi, \gamma_\xi)$
+interpolate smoothly between this solver, TurboMPC's slack-smoothed ADMM, and
+OSQP's projection ADMM, keeping the solution map differentiable for every
+$\kappa > 0$.
+
+\begin{thebibliography}{9}\footnotesize
+\itemsep1pt
+
+\bibitem{turbompc}
+G.~Bravo-Palacios, J.~Zhang, Z.~Pestrikov, B.~Plancher, and T.~Lew.
+\emph{TurboMPC: Fast, Scalable, and Differentiable Model Predictive Control on the
+GPU}. arXiv:2606.24039, 2026.
+
+\bibitem{osqp}
+B.~Stellato, G.~Banjac, P.~Goulart, A.~Bemporad, and S.~Boyd.
+\emph{OSQP: An operator splitting solver for quadratic programs}.
+Mathematical Programming Computation, 12(4):637--672, 2020.
+
+\bibitem{boyd}
+S.~Boyd, N.~Parikh, E.~Chu, B.~Peleato, and J.~Eckstein.
+\emph{Distributed optimization and statistical learning via the alternating
+direction method of multipliers}.
+Foundations and Trends in Machine Learning, 3(1):1--122, 2011.
+
+\bibitem{parikh}
+N.~Parikh and S.~Boyd.
+\emph{Proximal algorithms}.
+Foundations and Trends in Optimization, 1(3):127--239, 2014.
+
+\bibitem{tracy}
+K.~Tracy and Z.~Manchester.
+\emph{On the differentiability of the primal-dual interior-point method}.
+arXiv:2406.11749, 2024.
+
+\bibitem{optnet}
+B.~Amos and J.~Z. Kolter.
+\emph{OptNet: Differentiable optimization as a layer in neural networks}.
+ICML 2017, PMLR 70:136--145.
+
+\bibitem{frey}
+J.~Frey, K.~Baumg\"artner, G.~Frison, D.~Reinhardt, J.~Hoffmann, L.~Fichtner,
+S.~Gros, and M.~Diehl.
+\emph{Differentiable nonlinear model predictive control}.
+arXiv:2505.01353, 2025.
+
+\bibitem{nw}
+J.~Nocedal and S.~J. Wright.
+\emph{Numerical Optimization}, 2nd ed. Springer, 2006. (Chs.~16, 18, 19.)
+
+\end{thebibliography}
+
+\end{document}
