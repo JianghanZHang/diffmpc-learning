@@ -315,6 +315,44 @@ observation was an artifact — the flag wasn't plumbed; never actually A/B'd in
   construction), re-eval barrier-trained weights under the HARD deploy controller, V2@lr=3e-3,
   multi-seed. CSVs: `results/train_quadrotor_{plan,bptt}_barrier_seed0.csv`; policies saved.
 
+## ✅ UPDATE 2026-07-08 — LIFTED barrier SQP (outer-slack IPM) + rescale wiring; V4p spike saga CLOSED
+
+**The V4p pure-barrier gradient-spike investigation is resolved.** Full chain (all committed &
+pushed; solver `1881c9b`→`ca8cebc`, main `14115d2`):
+
+1. **Root cause = silent non-convergence.** The fused jitted SQP exited at the iteration cap with
+   a large residual but was treated as "converged"; the backward then differentiated a non-solution
+   → 1.5e3 / 2.8e7 spikes. Instrumentation (per-solve `conv/rs/comp/iters`, `n_nonconv` counting
+   failure on ANY exit criterion incl. cap-hit) confirmed: every spike coincided with a cap-out.
+2. **Convergence check was incomplete.** The hard KKT residual (stationarity+eq+violation-clip) is
+   category-blind to barrier-domain membership (`s∘y=κ` lives BELOW tol). Added the **smoothed-NLP
+   KKT third block** — the complementarity residual `‖s∘y−κ‖∞/κ` (κ-relative). This is the y_g
+   crosscheck quantity, promoted from post-hoc assert to termination criterion.
+3. **On the RAW clearance the smoothed check is unsatisfiable at the boundary** (curvature
+   re-crossings can't be iterated away with primal steps → 40-cap bursts, ~250s updates). Fix =
+   the **IPM lift**: carry the outer slack `s` as an interior iterate (`min f − κΣlog s s.t. c=0,
+   r(x)+s=0`). `_lifted_jit_loop` (solver): inner QP UNCHANGED (its s-block is diagonal → the QP
+   is the condensed system, dual gives `s_target=κ/y`); globalization = FTB cap (τ=0.99, s>0
+   forever) + Armijo on the lifted ℓ1 merit (barrier finite by construction, no relaxed-merit
+   hack); exit on 4 graded residuals. Gated vs the eager filter reference; the inner ADMM primal
+   residual `‖Gx−z_g‖` IS the linearized `‖Gx−h+s‖`, so the lift is consistent at both levels.
+4. **Result — V4p pure trains cleanly on the lifted loop:** eval 46.76→**32.91 (≈ hard V1's 32.7)**,
+   0 catastrophic spikes, 62.8 s/update (vs 250s smoothed-check bursts). Remaining elevated grads
+   (≤~90 on hard post-reset windows) are (a) genuine BPTT-post-reset sensitivity matching the
+   V3-hard envelope (32.5) and (b) residual SQP hard-residual under-convergence on 2–7/24 solves per
+   hard window — bounded, training absorbs it. Open (optional): cap test (raise 40→120) to see if
+   those windows just need more iterations or are stalled.
+5. **rescale_optimization_variables wired** (racing prep — first Diff-WMPC task with rescale=True).
+   scale_qp_data is pure column scaling ⇒ bounds/clearance/duals frame-INVARIANT, only the primal
+   changes frame. Forward: unscale the inner QP primal in `_lifted_jit_loop`. Backward: build the
+   reduced KKT UNSCALED (`apply_variable_scaling=False`, matching the hard DIRECT convention) —
+   fixes the scaled-G×physical-x frame bug. Gated by rescale-INVARIANCE of the physical gradient:
+   interior/smooth cos=1.000000 (rel 1.6e-4/4.2e-6) + AD=FD; grazing cos 0.9994 (few-% from
+   convergence-point sensitivity, not a frame bug). No-op for rescale=False.
+   **Racing still needs**: the EAGER cold-start forward (`logbarrier_nlp_solve`, used post-reset)
+   given the same inner-primal unscale (the user's absent eager fix); and a racing env module under
+   `env/`. Untracked solver test `test_turbompc_x0_sensitivity.py` left for deliberate commit.
+
 ## ✅ UPDATE 2026-07-06 — fused CUDA logbarrier WIRED into training (jitted SQP driver); gates PASSED
 
 **Discovery.** Barrier training was ~50–100× slower than the hard arms purely from EAGER dispatch,
