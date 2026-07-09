@@ -340,8 +340,18 @@ ADJOINT robust to the near-singular reduced Hessian at those points, capping the
 hard-arm level (32.7–32.8) instead of OFF's late drift to 35.7. 0 violations both.
 sigma_x=1e-2 = a 10% floor relative to the smallest cost curvature (R=0.1). Cost: backward-only,
 ~same per-update time. ⇒ **recommend sigma_x~1e-2 as the default for the pure-barrier BPTT arm.**
-(OFF upd-61 spike checkpoint kept for a deterministic replay if a single-point damping number is
-wanted.)
+
+**sigma_f tried and REJECTED (deterministic replay of the OFF upd-61 spike,
+`test/probe_spike_sigma_sweep.py`):** ‖grad‖ at the spike point vs the two knobs —
+sigma_x {0,1e-3,1e-2,1e-1,1}: 16.4 / 16.1 / 13.9 / 6.9 / **1.8** (clean monotone damping);
+sigma_f {0,1e-3,1e-2,1e-1,1}: 16.4 / **427** / 39.9 / 81.9 / 16.6 (erratic, ALWAYS ≥ baseline).
+sigma_f targets equality/dynamics tangent-feasibility (σf→0 = hard Cx=0, σf→∞ = ignore it) —
+ORTHOGONAL to the primal near-singularity that causes the spikes, and LICQ holds by construction
+so there is no feasibility mode to fix. At small σf the dense LU on the near-singular saddle with
+the 1e3-scale CᵀC/σf term blows up (427). ⇒ **do NOT use sigma_f for this issue** (a σf training
+A/B would likely destabilize). sigma_x is the correct regularizer.
+(Replay note: the spike point reads 16.4 at σx=0, not training's 100.9 — the gradient at a
+near-singular point is itself f64-hypersensitive; the RELATIVE damping is the robust signal.)
 
 ## ✅ UPDATE 2026-07-08 — LIFTED barrier SQP (outer-slack IPM) + rescale wiring; V4p spike saga CLOSED
 
