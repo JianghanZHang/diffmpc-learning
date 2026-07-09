@@ -168,7 +168,13 @@ def make_barrier_ws_layer(solver, cfg=None):
             use_slack=cfg["use_slack"], max_sqp_iter=cfg["fused_max_sqp_iter"],
             sqp_tol=cfg["sqp_tol"], inner_cfg=cfg["inner_cfg"],
             conv_check=cfg["fwd_conv_check"], comp_tol_rel=cfg["fwd_comp_tol_rel"],
-            lifted=cfg["fwd_lifted"])
+            lifted=cfg["fwd_lifted"],
+            # logbarrier_nlp_solve_jit defaults flipped to the lean fair config
+            # (linesearch=False, inner_warmstart=True) on 2026-07-09; training relied on
+            # the OLD defaults, so pass them explicitly to preserve globalization on the
+            # quadrotor's infeasible cold starts (the V4p spike fix). inner_warmstart
+            # is ignored by the lifted path anyway.
+            linesearch=True, inner_warmstart=False)
 
     def _eager_solve(pp, w, max_sqp_iter=None):
         """Eager globalized solve (filter + restoration) — cold starts + fallback."""
