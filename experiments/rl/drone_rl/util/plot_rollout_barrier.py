@@ -1,6 +1,12 @@
-"""Closed-loop xy trajectories of the trained V2/V4 (barrier) policies, with V1 (hard)
-as reference. Each arm deploys ITS OWN controller (barrier arms: elastic logbarrier
-layer; V1: hard layer). Output: results/plot/quadrotor_rollout_v2_v4.png
+"""Closed-loop xy trajectories of the trained Diff-MPC policies (seed 0).
+
+Five arms, matching the training-curve plot: hard-plan, barrier-plan, hard-BPTT,
+barrier-BPTT, and barrier-BPTT + §4.7 regularized sensitivity. Each arm deploys ITS
+OWN controller — barrier arms on the pure (no-inequality-slack) log-barrier layer,
+hard arms on the hard-box layer. The reg-sens arm deploys the reg-sens-trained policy
+on the same pure barrier forward (sigma_x is a backward-only knob, so the rollout is
+identical to any pure-barrier forward — the difference is the trained weights).
+Output: results/plot/quadrotor_rollout.png
 
 Run (cuDSS env):
   PYTHONPATH=external/diffmpc2 <venv>/python -u experiments/rl/drone_rl/util/plot_rollout_barrier.py
@@ -76,25 +82,25 @@ def main():
     t2w = make_theta_to_weights(pp[env.QK], pp[env.RK])
 
     arms = []
-    print("rollout V1 (hard)...")
-    arms.append(("V1 hard-plan", ARM_COLORS["plan_hard"],
+    print("rollout hard-plan...")
+    arms.append(("hard-plan", ARM_COLORS["plan_hard"],
                  rollout_hard(load_policy("train_quadrotor_plan_hard_seed0_theta.npz"),
                               t2w, dyn, pp)))
-    print("rollout V2 (barrier)...")
-    arms.append(("V2 barrier-plan (lr 3e-3)", ARM_COLORS["plan_barrier"],
-                 rollout_barrier(load_policy("train_quadrotor_plan_barrier_seed0_theta.npz"),
-                                 t2w, dyn, pp)))
-    print("rollout V4 (barrier)...")
-    arms.append(("V4 barrier-BPTT h24", ARM_COLORS["bptt_barrier"],
-                 rollout_barrier(load_policy("train_quadrotor_bptt_barrier_seed0_theta.npz"),
-                                 t2w, dyn, pp)))
-    print("rollout V2p (PURE barrier)...")
-    arms.append(("V2p PURE barrier-plan", ARM_COLORS["plan_barrier_pure"],
+    print("rollout barrier-plan...")
+    arms.append(("barrier-plan", ARM_COLORS["plan_barrier"],
                  rollout_barrier(load_policy("train_quadrotor_plan_barrier_pure_seed0_theta.npz"),
                                  t2w, dyn, pp, use_slack=False)))
-    print("rollout V4p (PURE barrier)...")
-    arms.append(("V4p PURE barrier-BPTT h24", ARM_COLORS["bptt_barrier_pure"],
+    print("rollout hard-BPTT...")
+    arms.append(("hard-BPTT", ARM_COLORS["bptt_hard"],
+                 rollout_hard(load_policy("train_quadrotor_bptt_hard_h24_seed0_theta.npz"),
+                              t2w, dyn, pp)))
+    print("rollout barrier-BPTT...")
+    arms.append(("barrier-BPTT", ARM_COLORS["bptt_barrier"],
                  rollout_barrier(load_policy("train_quadrotor_bptt_barrier_pure_seed0_theta.npz"),
+                                 t2w, dyn, pp, use_slack=False)))
+    print("rollout barrier-BPTT + reg-sens...")
+    arms.append(("barrier-BPTT + reg-sens", ARM_COLORS["bptt_barrier_regsens"],
+                 rollout_barrier(load_policy("train_quadrotor_bptt_barrier_pure_regsx0.01sf0_seed0_theta.npz"),
                                  t2w, dyn, pp, use_slack=False)))
 
     obs_c, obs_r = np.asarray(env.OBS_C), float(env.OBS_R)
@@ -105,22 +111,16 @@ def main():
 
     for name, color, xs in arms:
         p = xs[:, :2]
-        ls = "--" if "PURE" in name else "-"
-        ax.plot(p[:, 0], p[:, 1], color=color, lw=1.9, zorder=3, ls=ls)
+        ax.plot(p[:, 0], p[:, 1], color=color, lw=1.9, zorder=3)
         ax.plot(p[:, 0], p[:, 1], "o", color=color, ms=2.6, zorder=4)
         inside = np.linalg.norm(p - obs_c, axis=1) < obs_r
         if inside.any():
             ax.plot(p[inside, 0], p[inside, 1], "o", ms=5.5, mfc="none",
                     mec="#e34948", mew=1.2, zorder=5)
-        k = int(len(p) * 0.42)
-        ax.annotate(name.split()[0], p[k], xytext=(6, 6),
-                    textcoords="offset points", fontsize=9, fontweight="bold",
-                    color=INK)
 
     draw_start_goal(ax, np.asarray(env.START)[:2], np.asarray(env.GOAL)[:2])
 
-    handles = [plt.Line2D([], [], color=c, lw=2.2, ls="--" if "PURE" in n else "-",
-                          label=n) for n, c, _ in arms]
+    handles = [plt.Line2D([], [], color=c, lw=2.2, label=n) for n, c, _ in arms]
     handles.append(plt.Line2D([], [], marker="o", mfc="none", mec="#e34948",
                               ls="none", ms=6, label="step inside obstacle"))
     ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8.5)
@@ -131,7 +131,7 @@ def main():
                  "each arm on its own controller)", fontsize=10.5, color=INK,
                  loc="left")
     fig.tight_layout()
-    save_fig(fig, "quadrotor_rollout_v2_v4.png")
+    save_fig(fig, "quadrotor_rollout.png")
 
 
 if __name__ == "__main__":

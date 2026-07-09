@@ -61,6 +61,7 @@ ARM_COLORS = {
     "bptt_barrier": "#008300",       # V4 (elastic)
     "plan_barrier_pure": "#1baf7a",  # V2 pure — same family hue, dashed
     "bptt_barrier_pure": "#008300",  # V4 pure — same family hue, dashed
+    "bptt_barrier_regsens": "#7b4fb0",  # V4 pure + §4.7 regularized sensitivity
 }
 
 
